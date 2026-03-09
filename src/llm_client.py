@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from typing import Any
 
 from src.types import SQLGenerationOutput, AnswerGenerationOutput
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "openai/gpt-5-nano"
 
@@ -25,6 +28,7 @@ class OpenRouterLLMClient:
         self._stats = {"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     def _chat(self, messages: list[dict[str, str]], temperature: float, max_tokens: int) -> str:
+        chat_start = time.perf_counter()
         res = self._client.chat.send(
             messages=messages,
             model=self.model,
@@ -32,9 +36,20 @@ class OpenRouterLLMClient:
             max_tokens=max_tokens,
             stream=False,
         )
+        chat_ms = (time.perf_counter() - chat_start) * 1000
 
-        # TODO: Implement token counting here
-        # Required for efficiency evaluation - see README.md for details.
+        usage = getattr(res, "usage", None)
+        prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+        completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+        self._stats["llm_calls"] += 1
+        self._stats["prompt_tokens"] += prompt_tokens
+        self._stats["completion_tokens"] += completion_tokens
+        self._stats["total_tokens"] += prompt_tokens + completion_tokens
+
+        logger.debug("llm.call", extra={
+            "model": self.model, "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens, "latency_ms": round(chat_ms, 1),
+        })
 
         choices = getattr(res, "choices", None) or []
         if not choices:

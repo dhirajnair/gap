@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 import time
+import uuid
 from pathlib import Path
 
 from src.llm_client import OpenRouterLLMClient, build_default_llm_client
+
+logger = logging.getLogger(__name__)
 from src.types import (
     SQLValidationOutput,
     SQLExecutionOutput,
@@ -89,23 +93,41 @@ class AnalyticsPipeline:
         self.executor = SQLiteExecutor(self.db_path)
 
     def run(self, question: str, request_id: str | None = None) -> PipelineOutput:
+        request_id = request_id or uuid.uuid4().hex[:12]
         start = time.perf_counter()
+        logger.info("pipeline.start", extra={"request_id": request_id, "question": question[:200]})
 
         # Stage 1: SQL Generation
         sql_gen_output = self.llm.generate_sql(question, {})
         sql = sql_gen_output.sql
+        logger.info("stage.sql_generation", extra={
+            "request_id": request_id, "sql": sql[:200] if sql else None,
+            "timing_ms": round(sql_gen_output.timing_ms, 1), "error": sql_gen_output.error,
+        })
 
         # Stage 2: SQL Validation
         validation_output = SQLValidator.validate(sql)
         if not validation_output.is_valid:
             sql = None
+        logger.info("stage.sql_validation", extra={
+            "request_id": request_id, "is_valid": validation_output.is_valid,
+            "error": validation_output.error,
+        })
 
         # Stage 3: SQL Execution
         execution_output = self.executor.run(sql)
         rows = execution_output.rows
+        logger.info("stage.sql_execution", extra={
+            "request_id": request_id, "row_count": execution_output.row_count,
+            "timing_ms": round(execution_output.timing_ms, 1), "error": execution_output.error,
+        })
 
         # Stage 4: Answer Generation
         answer_output = self.llm.generate_answer(question, sql, rows)
+        logger.info("stage.answer_generation", extra={
+            "request_id": request_id,
+            "timing_ms": round(answer_output.timing_ms, 1), "error": answer_output.error,
+        })
 
         # Determine status
         status = "success"
@@ -135,6 +157,12 @@ class AnalyticsPipeline:
             "total_tokens": sql_gen_output.llm_stats.get("total_tokens", 0) + answer_output.llm_stats.get("total_tokens", 0),
             "model": sql_gen_output.llm_stats.get("model", "unknown"),
         }
+
+        logger.info("pipeline.complete", extra={
+            "request_id": request_id, "status": status,
+            "total_ms": round(timings["total_ms"], 1),
+            "total_tokens": total_llm_stats.get("total_tokens", 0),
+        })
 
         return PipelineOutput(
             status=status,
