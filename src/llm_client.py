@@ -152,7 +152,12 @@ class OpenRouterLLMClient:
         )
 
     def pop_stats(self) -> dict[str, Any]:
-        out = dict(self._stats or {})
+        out = {
+            "llm_calls": self._stats.get("llm_calls", 0),
+            "prompt_tokens": self._stats.get("prompt_tokens", 0),
+            "completion_tokens": self._stats.get("completion_tokens", 0),
+            "total_tokens": self._stats.get("total_tokens", 0),
+        }
         self._stats = {"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         return out
 
