@@ -108,6 +108,11 @@ class OpenRouterLLMClient:
             error=error,
         )
 
+    @staticmethod
+    def _sanitize_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Replace None values with readable placeholders for LLM consumption."""
+        return [{k: ("N/A" if v is None else v) for k, v in row.items()} for row in rows]
+
     def generate_answer(self, question: str, sql: str | None, rows: list[dict[str, Any]]) -> AnswerGenerationOutput:
         if not sql:
             return AnswerGenerationOutput(
@@ -130,7 +135,7 @@ class OpenRouterLLMClient:
         )
         user_prompt = (
             f"Question:\n{question}\n\nSQL:\n{sql}\n\n"
-            f"Rows (JSON):\n{json.dumps(rows[:30], ensure_ascii=True)}\n\n"
+            f"Rows (JSON):\n{json.dumps(self._sanitize_rows(rows[:30]), ensure_ascii=True)}\n\n"
             "Write a concise answer in plain English."
         )
 
