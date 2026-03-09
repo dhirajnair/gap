@@ -4,6 +4,7 @@ import sqlite3
 import time
 from pathlib import Path
 
+from src.conversation import ConversationManager, ConversationTurn
 from src.llm_client import OpenRouterLLMClient, build_default_llm_client
 from src.types import (
     SQLValidationOutput,
@@ -87,12 +88,18 @@ class AnalyticsPipeline:
         self.db_path = Path(db_path)
         self.llm = llm_client or build_default_llm_client()
         self.executor = SQLiteExecutor(self.db_path)
+        self.conversation = ConversationManager()
 
     def run(self, question: str, request_id: str | None = None) -> PipelineOutput:
         start = time.perf_counter()
 
+        # Context-aware question for follow-ups
+        effective_question = question
+        if self.conversation.is_followup(question):
+            effective_question = self.conversation.build_context_prompt(question)
+
         # Stage 1: SQL Generation
-        sql_gen_output = self.llm.generate_sql(question, {})
+        sql_gen_output = self.llm.generate_sql(effective_question, {})
         sql = sql_gen_output.sql
 
         # Stage 2: SQL Validation
@@ -135,6 +142,10 @@ class AnalyticsPipeline:
             "total_tokens": sql_gen_output.llm_stats.get("total_tokens", 0) + answer_output.llm_stats.get("total_tokens", 0),
             "model": sql_gen_output.llm_stats.get("model", "unknown"),
         }
+
+        self.conversation.add_turn(ConversationTurn(
+            question=question, sql=sql, rows=rows[:5], answer=answer_output.answer,
+        ))
 
         return PipelineOutput(
             status=status,
