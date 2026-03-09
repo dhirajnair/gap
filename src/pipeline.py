@@ -47,6 +47,8 @@ class SQLValidator:
 
 
 class SQLiteExecutor:
+    _TIMEOUT_SECONDS = 30
+
     def __init__(self, db_path: str | Path = DEFAULT_DB_PATH) -> None:
         self.db_path = Path(db_path)
 
@@ -65,7 +67,8 @@ class SQLiteExecutor:
             )
 
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with sqlite3.connect(self.db_path, timeout=self._TIMEOUT_SECONDS) as conn:
+                conn.execute(f"PRAGMA busy_timeout = {self._TIMEOUT_SECONDS * 1000}")
                 conn.row_factory = sqlite3.Row
                 cur = conn.cursor()
                 cur.execute(sql)
