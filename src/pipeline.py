@@ -87,6 +87,20 @@ class AnalyticsPipeline:
         self.db_path = Path(db_path)
         self.llm = llm_client or build_default_llm_client()
         self.executor = SQLiteExecutor(self.db_path)
+        self._schema_cache = self._load_schema()
+
+    def _load_schema(self) -> dict:
+        """Load and cache schema at init to avoid per-request introspection."""
+        schema: dict = {"tables": {}}
+        if not self.db_path.exists():
+            return schema
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+            for (table_name,) in cur.fetchall():
+                cur.execute(f'PRAGMA table_info("{table_name}")')
+                schema["tables"][table_name] = {row[1]: row[2] for row in cur.fetchall()}
+        return schema
 
     def run(self, question: str, request_id: str | None = None) -> PipelineOutput:
         start = time.perf_counter()
