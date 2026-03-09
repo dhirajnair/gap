@@ -23,8 +23,13 @@ class OpenRouterLLMClient:
         self.model = model or os.getenv("OPENROUTER_MODEL", DEFAULT_MODEL)
         self._client = OpenRouter(api_key=api_key)
         self._stats = {"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        self._cache: dict[str, str] = {}
 
     def _chat(self, messages: list[dict[str, str]], temperature: float, max_tokens: int) -> str:
+        cache_key = json.dumps(messages, sort_keys=True)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
         res = self._client.chat.send(
             messages=messages,
             model=self.model,
@@ -42,7 +47,9 @@ class OpenRouterLLMClient:
         content = getattr(getattr(choices[0], "message", None), "content", None)
         if not isinstance(content, str):
             raise RuntimeError("OpenRouter response content is not text.")
-        return content.strip()
+        result = content.strip()
+        self._cache[cache_key] = result
+        return result
 
     @staticmethod
     def _extract_sql(text: str) -> str | None:
