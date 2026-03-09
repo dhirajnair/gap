@@ -24,14 +24,27 @@ class OpenRouterLLMClient:
         self._client = OpenRouter(api_key=api_key)
         self._stats = {"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
+    _MAX_RETRIES = 2
+    _RETRY_BACKOFF = 1.0
+
     def _chat(self, messages: list[dict[str, str]], temperature: float, max_tokens: int) -> str:
-        res = self._client.chat.send(
-            messages=messages,
-            model=self.model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            stream=False,
-        )
+        last_exc: Exception | None = None
+        for attempt in range(1 + self._MAX_RETRIES):
+            try:
+                res = self._client.chat.send(
+                    messages=messages,
+                    model=self.model,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    stream=False,
+                )
+                break
+            except Exception as exc:
+                last_exc = exc
+                if attempt < self._MAX_RETRIES:
+                    time.sleep(self._RETRY_BACKOFF * (2 ** attempt))
+                    continue
+                raise RuntimeError(f"LLM call failed after {self._MAX_RETRIES + 1} attempts: {exc}") from exc
 
         # TODO: Implement token counting here
         # Required for efficiency evaluation - see README.md for details.
