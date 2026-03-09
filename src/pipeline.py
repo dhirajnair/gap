@@ -6,6 +6,8 @@ from pathlib import Path
 
 from src.llm_client import OpenRouterLLMClient, build_default_llm_client
 from src.types import (
+    SQLGenerationOutput,
+    AnswerGenerationOutput,
     SQLValidationOutput,
     SQLExecutionOutput,
     PipelineOutput,
@@ -88,8 +90,33 @@ class AnalyticsPipeline:
         self.llm = llm_client or build_default_llm_client()
         self.executor = SQLiteExecutor(self.db_path)
 
+    _MAX_QUESTION_LEN = 1000
+
+    def _empty_result(self, question: str, request_id: str | None, start: float, reason: str) -> PipelineOutput:
+        _zero_llm = {"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "model": "none"}
+        elapsed = (time.perf_counter() - start) * 1000
+        return PipelineOutput(
+            status="unanswerable", question=question, request_id=request_id,
+            sql_generation=SQLGenerationOutput(sql=None, timing_ms=0.0, llm_stats=_zero_llm, error=reason),
+            sql_validation=SQLValidationOutput(is_valid=False, validated_sql=None, error=reason),
+            sql_execution=SQLExecutionOutput(rows=[], row_count=0, timing_ms=0.0),
+            answer_generation=AnswerGenerationOutput(
+                answer=f"I cannot answer this with the available table and schema. Please rephrase using known survey fields.",
+                timing_ms=0.0, llm_stats=_zero_llm,
+            ),
+            sql=None, rows=[], answer="I cannot answer this with the available table and schema. Please rephrase using known survey fields.",
+            timings={"sql_generation_ms": 0, "sql_validation_ms": 0, "sql_execution_ms": 0, "answer_generation_ms": 0, "total_ms": elapsed},
+            total_llm_stats=_zero_llm,
+        )
+
     def run(self, question: str, request_id: str | None = None) -> PipelineOutput:
         start = time.perf_counter()
+
+        question = (question or "").strip()
+        if not question:
+            return self._empty_result("", request_id, start, "Empty question")
+        if len(question) > self._MAX_QUESTION_LEN:
+            question = question[: self._MAX_QUESTION_LEN]
 
         # Stage 1: SQL Generation
         sql_gen_output = self.llm.generate_sql(question, {})
