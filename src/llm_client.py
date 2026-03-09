@@ -62,13 +62,25 @@ class OpenRouterLLMClient:
             return text[idx:].strip()
         return None
 
+    @staticmethod
+    def _compact_schema(context: dict) -> str:
+        tables = context.get("tables", {})
+        if not tables:
+            return ""
+        parts = []
+        for tbl, cols in tables.items():
+            col_str = ",".join(cols.keys()) if isinstance(cols, dict) else str(cols)
+            parts.append(f"{tbl}({col_str})")
+        return ";".join(parts)
+
     def generate_sql(self, question: str, context: dict) -> SQLGenerationOutput:
+        schema = self._compact_schema(context)
         system_prompt = (
-            "You are a SQL assistant. "
-            "Generate SQLite SELECT queries from natural language questions. "
-            "Return your response in a format that can be parsed to extract the SQL."
+            "SQLite SELECT generator. Reply ONLY {\"sql\":\"<query>\"} or {\"sql\":null}.\n"
+            f"Schema: {schema}" if schema else
+            "SQLite SELECT generator. Reply ONLY {\"sql\":\"<query>\"} or {\"sql\":null}."
         )
-        user_prompt = f"Context: {context}\n\nQuestion: {question}\n\nGenerate a SQL query to answer this question."
+        user_prompt = question
 
         start = time.perf_counter()
         error = None
@@ -111,14 +123,12 @@ class OpenRouterLLMClient:
                 error=None,
             )
 
-        system_prompt = (
-            "You are a concise analytics assistant. "
-            "Use only the provided SQL results. Do not invent data."
-        )
+        system_prompt = "Answer concisely using only the provided data. Do not invent data."
+        truncated_rows = rows[:20]
         user_prompt = (
-            f"Question:\n{question}\n\nSQL:\n{sql}\n\n"
-            f"Rows (JSON):\n{json.dumps(rows[:30], ensure_ascii=True)}\n\n"
-            "Write a concise answer in plain English."
+            f"Q: {question}\nSQL: {sql}\n"
+            f"Data: {json.dumps(truncated_rows, ensure_ascii=True)}\n"
+            "Answer:"
         )
 
         start = time.perf_counter()
