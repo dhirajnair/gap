@@ -90,7 +90,7 @@ class OpenRouterLLMClient:
             text = self._chat(
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
                 temperature=0.0,
-                max_tokens=240,
+                max_tokens=150,
             )
             sql = self._extract_sql(text)
         except Exception as exc:
@@ -139,7 +139,7 @@ class OpenRouterLLMClient:
             answer = self._chat(
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
                 temperature=0.2,
-                max_tokens=220,
+                max_tokens=150,
             )
         except Exception as exc:
             error = str(exc)
