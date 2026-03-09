@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -21,8 +22,17 @@ class SQLValidationError(Exception):
 
 
 class SQLValidator:
+    _BLOCKED_KEYWORDS = re.compile(
+        r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|ATTACH|DETACH|REPLACE)\b",
+        re.IGNORECASE,
+    )
+    _DANGEROUS_PATTERNS = re.compile(
+        r"\b(PRAGMA|sqlite_master|sqlite_temp_master)\b|--|/\*",
+        re.IGNORECASE,
+    )
+
     @classmethod
-    def validate(cls, sql: str | None) -> SQLValidationOutput:
+    def validate(cls, sql: str | None, db_path: Path | None = None) -> SQLValidationOutput:
         start = time.perf_counter()
 
         if sql is None:
@@ -33,12 +43,60 @@ class SQLValidator:
                 timing_ms=(time.perf_counter() - start) * 1000,
             )
 
-        # TODO: Implement SQL validation logic
-        # Consider what validation is needed for this use case
+        normalized = sql.strip().rstrip(";")
+
+        # Block non-SELECT statements
+        if not normalized.upper().startswith("SELECT"):
+            return SQLValidationOutput(
+                is_valid=False,
+                validated_sql=None,
+                error="Only SELECT statements are allowed",
+                timing_ms=(time.perf_counter() - start) * 1000,
+            )
+
+        # Block DML/DDL keywords
+        if cls._BLOCKED_KEYWORDS.search(normalized):
+            return SQLValidationOutput(
+                is_valid=False,
+                validated_sql=None,
+                error="Statement contains blocked keyword",
+                timing_ms=(time.perf_counter() - start) * 1000,
+            )
+
+        # Block dangerous patterns (PRAGMA, system tables, comments)
+        if cls._DANGEROUS_PATTERNS.search(normalized):
+            return SQLValidationOutput(
+                is_valid=False,
+                validated_sql=None,
+                error="Statement contains dangerous pattern",
+                timing_ms=(time.perf_counter() - start) * 1000,
+            )
+
+        # Block multi-statement (semicolons in the middle)
+        if ";" in normalized:
+            return SQLValidationOutput(
+                is_valid=False,
+                validated_sql=None,
+                error="Multiple statements not allowed",
+                timing_ms=(time.perf_counter() - start) * 1000,
+            )
+
+        # Syntax validation via EXPLAIN
+        if db_path and db_path.exists():
+            try:
+                with sqlite3.connect(db_path) as conn:
+                    conn.execute(f"EXPLAIN {normalized}")
+            except sqlite3.Error as e:
+                return SQLValidationOutput(
+                    is_valid=False,
+                    validated_sql=None,
+                    error=f"SQL syntax error: {e}",
+                    timing_ms=(time.perf_counter() - start) * 1000,
+                )
 
         return SQLValidationOutput(
             is_valid=True,
-            validated_sql=sql,
+            validated_sql=normalized,
             error=None,
             timing_ms=(time.perf_counter() - start) * 1000,
         )
@@ -96,7 +154,7 @@ class AnalyticsPipeline:
         sql = sql_gen_output.sql
 
         # Stage 2: SQL Validation
-        validation_output = SQLValidator.validate(sql)
+        validation_output = SQLValidator.validate(sql, db_path=self.db_path)
         if not validation_output.is_valid:
             sql = None
 
