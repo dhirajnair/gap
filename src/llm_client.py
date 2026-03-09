@@ -62,13 +62,29 @@ class OpenRouterLLMClient:
             return text[idx:].strip()
         return None
 
+    @staticmethod
+    def _build_schema_text(context: dict) -> str:
+        tables = context.get("tables", {})
+        if not tables:
+            return "No schema available."
+        parts = []
+        for tbl, cols in tables.items():
+            col_list = ", ".join(f"{c} ({t})" for c, t in cols.items())
+            parts.append(f"Table: {tbl}\nColumns: {col_list}")
+        return "\n".join(parts)
+
     def generate_sql(self, question: str, context: dict) -> SQLGenerationOutput:
+        schema_text = self._build_schema_text(context)
         system_prompt = (
-            "You are a SQL assistant. "
-            "Generate SQLite SELECT queries from natural language questions. "
-            "Return your response in a format that can be parsed to extract the SQL."
+            "You are a SQLite SQL generator. Rules:\n"
+            "- Only generate SELECT statements\n"
+            "- Use only the table and columns listed below\n"
+            "- Use SQLite syntax\n"
+            "- Reply with ONLY a JSON object: {\"sql\": \"<query>\"}\n"
+            "- If the question cannot be answered from the schema, reply: {\"sql\": null}\n\n"
+            f"Schema:\n{schema_text}"
         )
-        user_prompt = f"Context: {context}\n\nQuestion: {question}\n\nGenerate a SQL query to answer this question."
+        user_prompt = question
 
         start = time.perf_counter()
         error = None
