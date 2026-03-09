@@ -104,6 +104,11 @@ class AnalyticsPipeline:
         execution_output = self.executor.run(sql)
         rows = execution_output.rows
 
+        # On execution error, clear sql/rows so answer gen handles gracefully
+        if execution_output.error:
+            sql = None
+            rows = []
+
         # Stage 4: Answer Generation
         answer_output = self.llm.generate_answer(question, sql, rows)
 
