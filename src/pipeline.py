@@ -58,8 +58,8 @@ class SQLValidator:
 
         normalized = sql.strip().rstrip(";")
 
-        # Block non-SELECT statements
-        if not normalized.upper().startswith("SELECT"):
+        # Block non-SELECT statements (allow WITH ... SELECT for CTEs)
+        if not normalized.upper().startswith(("SELECT", "WITH")):
             return SQLValidationOutput(
                 is_valid=False,
                 validated_sql=None,
