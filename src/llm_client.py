@@ -7,6 +7,17 @@ from typing import Any
 
 from src.types import SQLGenerationOutput, AnswerGenerationOutput
 
+try:
+    from langfuse.decorators import observe, langfuse_context
+except ImportError:
+    def observe(*args, **kwargs):
+        def decorator(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return decorator
+    langfuse_context = None
+
 DEFAULT_MODEL = "openai/gpt-5-nano"
 
 
@@ -24,6 +35,7 @@ class OpenRouterLLMClient:
         self._client = OpenRouter(api_key=api_key)
         self._stats = {"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
+    @observe(as_type="generation")
     def _chat(self, messages: list[dict[str, str]], temperature: float, max_tokens: int) -> str:
         res = self._client.chat.send(
             messages=messages,
@@ -58,6 +70,13 @@ class OpenRouterLLMClient:
         self._stats["prompt_tokens"] += prompt_tokens
         self._stats["completion_tokens"] += completion_tokens
         self._stats["total_tokens"] += prompt_tokens + completion_tokens
+
+        if langfuse_context:
+            langfuse_context.update_current_observation(
+                model=self.model,
+                usage={"input": prompt_tokens, "output": completion_tokens},
+                metadata={"temperature": temperature, "max_tokens": max_tokens},
+            )
 
         return content.strip()
 
@@ -117,6 +136,7 @@ class OpenRouterLLMClient:
             parts.append(f"Table: {tbl}\nColumns: {col_list}")
         return "\n".join(parts)
 
+    @observe()
     def generate_sql(self, question: str, context: dict) -> SQLGenerationOutput:
         schema_text = self._build_schema_text(context)
         system_prompt = (
@@ -162,6 +182,7 @@ class OpenRouterLLMClient:
             error=error,
         )
 
+    @observe()
     def generate_answer(self, question: str, sql: str | None, rows: list[dict[str, Any]]) -> AnswerGenerationOutput:
         if not sql:
             return AnswerGenerationOutput(
