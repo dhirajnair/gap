@@ -34,8 +34,13 @@ class OpenRouterLLMClient:
         )
 
         usage = getattr(res, "usage", None)
-        prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
-        completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+
+        prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        self._stats["llm_calls"] += 1
+        self._stats["prompt_tokens"] += prompt_tokens
+        self._stats["completion_tokens"] += completion_tokens
+        self._stats["total_tokens"] += prompt_tokens + completion_tokens
 
         choices = getattr(res, "choices", None) or []
         if not choices:
