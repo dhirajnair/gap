@@ -123,14 +123,12 @@ class AnalyticsPipeline:
 
         # Determine status
         status = "success"
-        if sql_gen_output.sql is None and sql_gen_output.error:
+        if sql_gen_output.sql is None:
             status = "unanswerable"
         elif not validation_output.is_valid:
             status = "invalid_sql"
         elif execution_output.error:
             status = "error"
-        elif sql is None:
-            status = "unanswerable"
 
         # Build timings aggregate
         timings = {
