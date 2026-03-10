@@ -32,7 +32,7 @@ class SQLValidator:
     )
 
     @classmethod
-    def validate(cls, sql: str | None, db_path: Path | None = None) -> SQLValidationOutput:
+    def validate(cls, sql: str | None, db_path: Path | None = None, allowed_tables: set[str] | None = None) -> SQLValidationOutput:
         start = time.perf_counter()
 
         if sql is None:
@@ -80,6 +80,20 @@ class SQLValidator:
                 error="Multiple statements not allowed",
                 timing_ms=(time.perf_counter() - start) * 1000,
             )
+
+        # Table allowlist check
+        if allowed_tables:
+            from_match = re.findall(r'\bFROM\s+"?(\w+)"?', normalized, re.IGNORECASE)
+            join_match = re.findall(r'\bJOIN\s+"?(\w+)"?', normalized, re.IGNORECASE)
+            referenced = set(from_match + join_match)
+            disallowed = referenced - allowed_tables
+            if disallowed:
+                return SQLValidationOutput(
+                    is_valid=False,
+                    validated_sql=None,
+                    error=f"References disallowed table(s): {', '.join(sorted(disallowed))}",
+                    timing_ms=(time.perf_counter() - start) * 1000,
+                )
 
         # Syntax validation via EXPLAIN
         if db_path and db_path.exists():
@@ -158,7 +172,17 @@ class AnalyticsPipeline:
         self.db_path = Path(db_path)
         self.llm = llm_client or build_default_llm_client()
         self.executor = SQLiteExecutor(self.db_path)
+        self._allowed_tables = self._get_table_names()
         self.schema = _load_schema(self.db_path)
+
+    def _get_table_names(self) -> set[str]:
+        if not self.db_path.exists():
+            return set()
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+            return {row[0] for row in cur.fetchall()}
+
 
     def run(self, question: str, request_id: str | None = None) -> PipelineOutput:
         start = time.perf_counter()
@@ -168,7 +192,7 @@ class AnalyticsPipeline:
         sql = sql_gen_output.sql
 
         # Stage 2: SQL Validation
-        validation_output = SQLValidator.validate(sql, db_path=self.db_path)
+        validation_output = SQLValidator.validate(sql, db_path=self.db_path, allowed_tables=self._allowed_tables)
         if not validation_output.is_valid:
             sql = None
 
