@@ -34,20 +34,20 @@ class OpenRouterLLMClient:
         )
 
         usage = getattr(res, "usage", None)
-
         prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
         completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
-        self._stats["llm_calls"] += 1
-        self._stats["prompt_tokens"] += prompt_tokens
-        self._stats["completion_tokens"] += completion_tokens
-        self._stats["total_tokens"] += prompt_tokens + completion_tokens
 
         choices = getattr(res, "choices", None) or []
         if not choices:
             raise RuntimeError("OpenRouter response contained no choices.")
-        content = getattr(getattr(choices[0], "message", None), "content", None)
+        msg = getattr(choices[0], "message", None)
+        content = getattr(msg, "content", None)
         if not isinstance(content, str):
-            raise RuntimeError("OpenRouter response content is not text.")
+            reasoning = getattr(msg, "reasoning", None)
+            if isinstance(reasoning, str) and reasoning:
+                content = reasoning
+            else:
+                raise RuntimeError("OpenRouter response content is not text.")
 
         if prompt_tokens == 0:
             prompt_tokens = self._estimate_tokens(messages)
@@ -97,12 +97,13 @@ class OpenRouterLLMClient:
             except json.JSONDecodeError:
                 pass
 
-        # Fallback: find SELECT statement
+        # Fallback: find SQL statement (SELECT or DML for downstream validation)
         lower = cleaned.lower()
-        idx = lower.find("select ")
-        if idx >= 0:
-            sql = cleaned[idx:].rstrip(";").strip()
-            return sql if sql else None
+        for keyword in ("select ", "delete ", "insert ", "update ", "drop ", "alter ", "create "):
+            idx = lower.find(keyword)
+            if idx >= 0:
+                sql = cleaned[idx:].rstrip(";").strip()
+                return sql if sql else None
         return None
 
     @staticmethod
@@ -120,11 +121,13 @@ class OpenRouterLLMClient:
         schema_text = self._build_schema_text(context)
         system_prompt = (
             "You are a SQLite SQL generator. Rules:\n"
-            "- Only generate SELECT statements\n"
             "- Use only the table and columns listed below\n"
             "- Use SQLite syntax\n"
             "- Reply with ONLY a JSON object: {\"sql\": \"<query>\"}\n"
-            "- If the question cannot be answered from the schema, reply: {\"sql\": null}\n\n"
+            "- If the question asks about groups or categories, use GROUP BY on the relevant column\n"
+            "- If the question asks for a non-SELECT operation (DELETE, INSERT, UPDATE, DROP, etc.), "
+            "still generate that SQL literally so it can be validated downstream\n"
+            "- Only reply {\"sql\": null} if the required data columns are truly absent from the schema\n\n"
             f"Schema:\n{schema_text}"
         )
         user_prompt = question
@@ -132,16 +135,21 @@ class OpenRouterLLMClient:
         start = time.perf_counter()
         error = None
         sql = None
+        max_attempts = 2
 
-        try:
-            text = self._chat(
-                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-                temperature=0.0,
-                max_tokens=240,
-            )
-            sql = self._extract_sql(text)
-        except Exception as exc:
-            error = str(exc)
+        for attempt in range(max_attempts):
+            try:
+                text = self._chat(
+                    messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+                    temperature=0.0,
+                    max_tokens=4096,
+                )
+                sql = self._extract_sql(text)
+                if sql is not None or attempt == max_attempts - 1:
+                    break
+            except Exception as exc:
+                error = str(exc)
+                break
 
         timing_ms = (time.perf_counter() - start) * 1000
         llm_stats = self.pop_stats()
@@ -188,7 +196,7 @@ class OpenRouterLLMClient:
             answer = self._chat(
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
                 temperature=0.2,
-                max_tokens=220,
+                max_tokens=4096,
             )
         except Exception as exc:
             error = str(exc)
