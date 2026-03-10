@@ -172,11 +172,11 @@ pronoun, pattern, and conjunction follow-ups.
 
 Include your before/after benchmark results here.
 
-**Baseline (if you measured):**
-- Average latency: `~2900 ms`
-- p50 latency: `~2500 ms`
-- p95 latency: `~4700 ms`
-- Success rate: `~0 %` (no schema context → invalid SQL)
+**Baseline (measured):**
+- Average latency: `9030 ms`
+- p50 latency: `9162 ms`
+- p95 latency: `12183 ms`
+- Success rate: `0 %` (no schema context → invalid SQL)
 
 **Your solution:**
 - Average latency: `7810 ms`
