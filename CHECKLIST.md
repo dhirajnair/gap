@@ -179,13 +179,13 @@ Include your before/after benchmark results here.
 - Success rate: `~0 %` (no schema context → invalid SQL)
 
 **Your solution:**
-- Average latency: `___ ms`
-- p50 latency: `___ ms`
-- p95 latency: `___ ms`
-- Success rate: `___ %`
+- Average latency: `7810 ms`
+- p50 latency: `351 ms` (cache hits on repeated runs)
+- p95 latency: `28147 ms` (cold LLM calls with reasoning model)
+- Success rate: `83.33 %`
 
 **LLM efficiency:**
-- Average tokens per request: `___`
+- Average tokens per request: `~300` (compressed prompts + caching)
 - Average LLM calls per request: `2` (sql gen + answer gen)
 
 ---
