@@ -106,7 +106,7 @@ class AnalyticsPipeline:
         start = time.perf_counter()
 
         # Stage 1: SQL Generation
-        sql_gen_output = self.llm.generate_sql(question, {})
+        sql_gen_output = self.llm.generate_sql(question, self.schema)
         sql = sql_gen_output.sql
 
         # Stage 2: SQL Validation
