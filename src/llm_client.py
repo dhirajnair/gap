@@ -34,6 +34,7 @@ class OpenRouterLLMClient:
         self.model = model or os.getenv("OPENROUTER_MODEL", DEFAULT_MODEL)
         self._client = OpenRouter(api_key=api_key)
         self._stats = {"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        self._cache: dict[str, str] = {}
 
     _MAX_RETRIES = 2
     _RETRY_BACKOFF = 1.0
@@ -99,7 +100,8 @@ class OpenRouterLLMClient:
                 metadata={"temperature": temperature, "max_tokens": max_tokens},
             )
 
-       return result
+
+        return result
 
     @staticmethod
     def _estimate_tokens_text(text: str) -> int:
