@@ -12,6 +12,17 @@ from src.types import (
     PipelineOutput,
 )
 
+try:
+    from langfuse.decorators import observe, langfuse_context
+except ImportError:
+    def observe(*args, **kwargs):
+        def decorator(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return decorator
+    langfuse_context = None
+
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_DB_PATH = BASE_DIR / "data" / "gaming_mental_health.sqlite"
@@ -184,7 +195,15 @@ class AnalyticsPipeline:
             return {row[0] for row in cur.fetchall()}
 
 
+    @observe()
     def run(self, question: str, request_id: str | None = None) -> PipelineOutput:
+        if langfuse_context:
+            langfuse_context.update_current_trace(
+                name="pipeline-run",
+                input={"question": question},
+                metadata={"request_id": request_id},
+            )
+
         start = time.perf_counter()
 
         # Stage 1: SQL Generation
@@ -195,6 +214,13 @@ class AnalyticsPipeline:
         validation_output = SQLValidator.validate(sql, db_path=self.db_path, allowed_tables=self._allowed_tables)
         if not validation_output.is_valid:
             sql = None
+
+        if langfuse_context:
+            langfuse_context.score_current_trace(
+                name="sql_validation",
+                value=1.0 if validation_output.is_valid else 0.0,
+                comment=validation_output.error,
+            )
 
         # Stage 3: SQL Execution
         execution_output = self.executor.run(sql)
@@ -229,6 +255,11 @@ class AnalyticsPipeline:
             "total_tokens": sql_gen_output.llm_stats.get("total_tokens", 0) + answer_output.llm_stats.get("total_tokens", 0),
             "model": sql_gen_output.llm_stats.get("model", "unknown"),
         }
+
+        if langfuse_context:
+            langfuse_context.update_current_trace(
+                output={"status": status, "answer": answer_output.answer, "sql": sql},
+            )
 
         return PipelineOutput(
             status=status,
