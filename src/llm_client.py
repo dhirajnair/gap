@@ -76,20 +76,33 @@ class OpenRouterLLMClient:
 
     @staticmethod
     def _extract_sql(text: str) -> str | None:
-        maybe_json = text.strip()
-        if maybe_json.startswith("{") and maybe_json.endswith("}"):
+        import re
+        cleaned = text.strip()
+
+        # Strip markdown code fences if present
+        md_match = re.search(r"```(?:sql|json)?\s*\n?(.*?)```", cleaned, re.DOTALL)
+        if md_match:
+            cleaned = md_match.group(1).strip()
+
+        # Try JSON parse first
+        if cleaned.startswith("{"):
             try:
-                parsed = json.loads(maybe_json)
+                parsed = json.loads(cleaned)
                 sql = parsed.get("sql")
+                if sql is None:
+                    return None
                 if isinstance(sql, str) and sql.strip():
                     return sql.strip()
                 return None
             except json.JSONDecodeError:
                 pass
-        lower = text.lower()
+
+        # Fallback: find SELECT statement
+        lower = cleaned.lower()
         idx = lower.find("select ")
         if idx >= 0:
-            return text[idx:].strip()
+            sql = cleaned[idx:].rstrip(";").strip()
+            return sql if sql else None
         return None
 
     @staticmethod
