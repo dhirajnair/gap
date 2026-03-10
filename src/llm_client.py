@@ -139,29 +139,23 @@ class OpenRouterLLMClient:
         return None
 
     @staticmethod
-    def _build_schema_text(context: dict) -> str:
+    def _compact_schema(context: dict) -> str:
         tables = context.get("tables", {})
         if not tables:
-            return "No schema available."
+            return ""
         parts = []
         for tbl, cols in tables.items():
-            col_list = ", ".join(f"{c} ({t})" for c, t in cols.items())
-            parts.append(f"Table: {tbl}\nColumns: {col_list}")
-        return "\n".join(parts)
+            col_str = ",".join(cols.keys()) if isinstance(cols, dict) else str(cols)
+            parts.append(f"{tbl}({col_str})")
+        return ";".join(parts)
 
-    @observe()
+    @observe()  
     def generate_sql(self, question: str, context: dict) -> SQLGenerationOutput:
-        schema_text = self._build_schema_text(context)
+        schema = self._compact_schema(context)
         system_prompt = (
-            "You are a SQLite SQL generator. Rules:\n"
-            "- Use only the table and columns listed below\n"
-            "- Use SQLite syntax\n"
-            "- Reply with ONLY a JSON object: {\"sql\": \"<query>\"}\n"
-            "- If the question asks about groups or categories, use GROUP BY on the relevant column\n"
-            "- If the question asks for a non-SELECT operation (DELETE, INSERT, UPDATE, DROP, etc.), "
-            "still generate that SQL literally so it can be validated downstream\n"
-            "- Only reply {\"sql\": null} if the required data columns are truly absent from the schema\n\n"
-            f"Schema:\n{schema_text}"
+            "SQLite SELECT generator. Reply ONLY {\"sql\":\"<query>\"} or {\"sql\":null}.\n"
+            f"Schema: {schema}" if schema else
+            "SQLite SELECT generator. Reply ONLY {\"sql\":\"<query>\"} or {\"sql\":null}."
         )
         user_prompt = question
 
@@ -217,14 +211,12 @@ class OpenRouterLLMClient:
                 error=None,
             )
 
-        system_prompt = (
-            "You are a concise analytics assistant. "
-            "Use only the provided SQL results. Do not invent data."
-        )
+        system_prompt = "Answer concisely using only the provided data. Do not invent data."
+        truncated_rows = rows[:20]
         user_prompt = (
-            f"Question:\n{question}\n\nSQL:\n{sql}\n\n"
-            f"Rows (JSON):\n{json.dumps(self._sanitize_rows(rows[:30]), ensure_ascii=True)}\n\n"
-            "Write a concise answer in plain English."
+            f"Q: {question}\nSQL: {sql}\n"
+            f"Data: {json.dumps(truncated_rows, ensure_ascii=True)}\n"
+            "Answer:"
         )
 
         start = time.perf_counter()
