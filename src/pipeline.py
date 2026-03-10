@@ -154,12 +154,26 @@ class SQLiteExecutor:
         )
 
 
+def _load_schema(db_path: Path) -> dict:
+    """Extract table names, column names, and types from the SQLite database."""
+    schema: dict = {"tables": {}}
+    with sqlite3.connect(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        for (table_name,) in cur.fetchall():
+            cur.execute(f'PRAGMA table_info("{table_name}")')
+            columns = {row[1]: row[2] for row in cur.fetchall()}
+            schema["tables"][table_name] = columns
+    return schema
+
+
 class AnalyticsPipeline:
     def __init__(self, db_path: str | Path = DEFAULT_DB_PATH, llm_client: OpenRouterLLMClient | None = None) -> None:
         self.db_path = Path(db_path)
         self.llm = llm_client or build_default_llm_client()
         self.executor = SQLiteExecutor(self.db_path)
         self._allowed_tables = self._get_table_names()
+        self.schema = _load_schema(self.db_path)
 
     def _get_table_names(self) -> set[str]:
         if not self.db_path.exists():
@@ -169,11 +183,12 @@ class AnalyticsPipeline:
             cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
             return {row[0] for row in cur.fetchall()}
 
+
     def run(self, question: str, request_id: str | None = None) -> PipelineOutput:
         start = time.perf_counter()
 
         # Stage 1: SQL Generation
-        sql_gen_output = self.llm.generate_sql(question, {})
+        sql_gen_output = self.llm.generate_sql(question, self.schema)
         sql = sql_gen_output.sql
 
         # Stage 2: SQL Validation
@@ -190,14 +205,12 @@ class AnalyticsPipeline:
 
         # Determine status
         status = "success"
-        if sql_gen_output.sql is None and sql_gen_output.error:
+        if sql_gen_output.sql is None:
             status = "unanswerable"
         elif not validation_output.is_valid:
             status = "invalid_sql"
         elif execution_output.error:
             status = "error"
-        elif sql is None:
-            status = "unanswerable"
 
         # Build timings aggregate
         timings = {

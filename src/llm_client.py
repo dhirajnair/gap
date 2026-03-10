@@ -33,8 +33,14 @@ class OpenRouterLLMClient:
             stream=False,
         )
 
-        # TODO: Implement token counting here
-        # Required for efficiency evaluation - see README.md for details.
+        usage = getattr(res, "usage", None)
+
+        prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        self._stats["llm_calls"] += 1
+        self._stats["prompt_tokens"] += prompt_tokens
+        self._stats["completion_tokens"] += completion_tokens
+        self._stats["total_tokens"] += prompt_tokens + completion_tokens
 
         choices = getattr(res, "choices", None) or []
         if not choices:
@@ -42,33 +48,86 @@ class OpenRouterLLMClient:
         content = getattr(getattr(choices[0], "message", None), "content", None)
         if not isinstance(content, str):
             raise RuntimeError("OpenRouter response content is not text.")
+
+        if prompt_tokens == 0:
+            prompt_tokens = self._estimate_tokens(messages)
+        if completion_tokens == 0:
+            completion_tokens = self._estimate_tokens_text(content)
+
+        self._stats["llm_calls"] += 1
+        self._stats["prompt_tokens"] += prompt_tokens
+        self._stats["completion_tokens"] += completion_tokens
+        self._stats["total_tokens"] += prompt_tokens + completion_tokens
+
         return content.strip()
 
     @staticmethod
+    def _estimate_tokens_text(text: str) -> int:
+        """Rough token estimate: ~1.3 tokens per word."""
+        return max(1, int(len(text.split()) * 1.3))
+
+    @staticmethod
+    def _estimate_tokens(messages: list[dict[str, str]]) -> int:
+        total = 0
+        for msg in messages:
+            total += OpenRouterLLMClient._estimate_tokens_text(msg.get("content", ""))
+            total += 4  # per-message overhead
+        return total
+
+    @staticmethod
     def _extract_sql(text: str) -> str | None:
-        maybe_json = text.strip()
-        if maybe_json.startswith("{") and maybe_json.endswith("}"):
+        import re
+        cleaned = text.strip()
+
+        # Strip markdown code fences if present
+        md_match = re.search(r"```(?:sql|json)?\s*\n?(.*?)```", cleaned, re.DOTALL)
+        if md_match:
+            cleaned = md_match.group(1).strip()
+
+        # Try JSON parse first
+        if cleaned.startswith("{"):
             try:
-                parsed = json.loads(maybe_json)
+                parsed = json.loads(cleaned)
                 sql = parsed.get("sql")
+                if sql is None:
+                    return None
                 if isinstance(sql, str) and sql.strip():
                     return sql.strip()
                 return None
             except json.JSONDecodeError:
                 pass
-        lower = text.lower()
+
+        # Fallback: find SELECT statement
+        lower = cleaned.lower()
         idx = lower.find("select ")
         if idx >= 0:
-            return text[idx:].strip()
+            sql = cleaned[idx:].rstrip(";").strip()
+            return sql if sql else None
         return None
 
+    @staticmethod
+    def _build_schema_text(context: dict) -> str:
+        tables = context.get("tables", {})
+        if not tables:
+            return "No schema available."
+        parts = []
+        for tbl, cols in tables.items():
+            col_list = ", ".join(f"{c} ({t})" for c, t in cols.items())
+            parts.append(f"Table: {tbl}\nColumns: {col_list}")
+        return "\n".join(parts)
+
     def generate_sql(self, question: str, context: dict) -> SQLGenerationOutput:
+        schema_text = self._build_schema_text(context)
         system_prompt = (
-            "You are a SQL assistant. "
-            "Generate SQLite SELECT queries from natural language questions. "
-            "Return your response in a format that can be parsed to extract the SQL."
+            "You are a SQLite SQL generator. Rules:\n"
+            "- Only generate SELECT statements\n"
+            "- Use only the table and columns listed below\n"
+            "- Use SQLite syntax\n"
+            "- Reply with ONLY a JSON object: {\"sql\": \"<query>\"}\n"
+            "- If the question cannot be answered from the schema, reply: {\"sql\": null}\n\n"
+            f"Schema:\n{schema_text}"
         )
-        user_prompt = f"Context: {context}\n\nQuestion: {question}\n\nGenerate a SQL query to answer this question."
+        user_prompt = question
 
         start = time.perf_counter()
         error = None
@@ -147,7 +206,12 @@ class OpenRouterLLMClient:
         )
 
     def pop_stats(self) -> dict[str, Any]:
-        out = dict(self._stats or {})
+        out = {
+            "llm_calls": self._stats.get("llm_calls", 0),
+            "prompt_tokens": self._stats.get("prompt_tokens", 0),
+            "completion_tokens": self._stats.get("completion_tokens", 0),
+            "total_tokens": self._stats.get("total_tokens", 0),
+        }
         self._stats = {"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         return out
 
