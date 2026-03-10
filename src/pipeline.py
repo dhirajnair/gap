@@ -169,27 +169,14 @@ class SQLiteExecutor:
             error=error,
         )
 
-
-def _load_schema(db_path: Path) -> dict:
-    """Extract table names, column names, and types from the SQLite database."""
-    schema: dict = {"tables": {}}
-    with sqlite3.connect(db_path) as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-        for (table_name,) in cur.fetchall():
-            cur.execute(f'PRAGMA table_info("{table_name}")')
-            columns = {row[1]: row[2] for row in cur.fetchall()}
-            schema["tables"][table_name] = columns
-    return schema
-
-
 class AnalyticsPipeline:
     def __init__(self, db_path: str | Path = DEFAULT_DB_PATH, llm_client: OpenRouterLLMClient | None = None) -> None:
         self.db_path = Path(db_path)
         self.llm = llm_client or build_default_llm_client()
         self.executor = SQLiteExecutor(self.db_path)
         self._allowed_tables = self._get_table_names()
-        self.schema = _load_schema(self.db_path)
+        self.schema = self._load_schema()
+        self._cache: dict[str, str] = {}
 
     _MAX_QUESTION_LEN = 1000
 
@@ -218,6 +205,18 @@ class AnalyticsPipeline:
             cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
             return {row[0] for row in cur.fetchall()}
 
+    def _load_schema(self) -> dict:
+        """Load and cache schema at init to avoid per-request introspection."""
+        schema: dict = {"tables": {}}
+        if not self.db_path.exists():
+            return schema
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+            for (table_name,) in cur.fetchall():
+                cur.execute(f'PRAGMA table_info("{table_name}")')
+                schema["tables"][table_name] = {row[1]: row[2] for row in cur.fetchall()}
+        return schema
 
     @observe()
     def run(self, question: str, request_id: str | None = None) -> PipelineOutput:

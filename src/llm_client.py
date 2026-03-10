@@ -40,6 +40,10 @@ class OpenRouterLLMClient:
 
     @observe(as_type="generation")
     def _chat(self, messages: list[dict[str, str]], temperature: float, max_tokens: int) -> str:
+        cache_key = json.dumps(messages, sort_keys=True)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
         last_exc: Exception | None = None
         for attempt in range(1 + self._MAX_RETRIES):
             try:
@@ -74,6 +78,10 @@ class OpenRouterLLMClient:
             else:
                 raise RuntimeError("OpenRouter response content is not text.")
 
+        result = content.strip()
+        self._cache[cache_key] = result
+        
+
         if prompt_tokens == 0:
             prompt_tokens = self._estimate_tokens(messages)
         if completion_tokens == 0:
@@ -91,7 +99,7 @@ class OpenRouterLLMClient:
                 metadata={"temperature": temperature, "max_tokens": max_tokens},
             )
 
-        return content.strip()
+       return result
 
     @staticmethod
     def _estimate_tokens_text(text: str) -> int:
