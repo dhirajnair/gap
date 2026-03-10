@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from src.llm_client import OpenRouterLLMClient, build_default_llm_client
+from src.conversation import ConversationManager
 from src.types import (
     SQLGenerationOutput,
     AnswerGenerationOutput,
@@ -309,3 +310,15 @@ class AnalyticsPipeline:
             timings=timings,
             total_llm_stats=total_llm_stats,
         )
+
+    def run_conversation(
+        self,
+        question: str,
+        conversation: ConversationManager,
+        request_id: str | None = None,
+    ) -> PipelineOutput:
+        """Run a question through the pipeline with multi-turn conversation context."""
+        enriched = conversation.build_context_prompt(question)
+        result = self.run(enriched, request_id=request_id)
+        conversation.add_turn(question, result.sql, result.answer)
+        return result
