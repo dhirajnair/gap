@@ -137,6 +137,24 @@
 
 ---
 
+## EPIC 11: Langfuse Observability (Replace Custom Tracing)
+
+> Replace hand-rolled tracing/metrics from EPIC 5 with Langfuse's out-of-the-box
+> observability. Langfuse chosen over LangSmith for its 10× free tier (50K obs/month),
+> framework-agnostic `@observe()` decorator (we use OpenRouter, not LangChain),
+> and open-source self-host option.
+
+| # | Story | Description | File(s) |
+|---|-------|-------------|---------|
+| 11.1 | Add Langfuse dependency & config | `pip install langfuse`; add `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` to `.env.example` and `dotenv` loading | `requirements.txt`, `.env.example`, `src/__init__.py` |
+| 11.2 | Instrument pipeline with `@observe()` | Add `@observe()` decorator to `AnalyticsPipeline.run()` and each stage method so Langfuse auto-creates a nested trace per request with latency and I/O captured | `src/pipeline.py` |
+| 11.3 | Instrument LLM calls | Wrap `_chat()` with `@observe(as_type="generation")` to auto-capture model, prompt/completion tokens, latency, and full prompt/response for every LLM call | `src/llm_client.py` |
+| 11.4 | Add trace metadata & scores | Attach `request_id`, `question`, `status` as trace metadata; post a Langfuse score for SQL validation outcome (`valid` / `invalid` + reason) so quality is trackable in the dashboard | `src/pipeline.py` |
+| 11.5 | ~~Remove redundant custom tracing~~ | **Cancelled** — `timings` and `total_llm_stats` are part of the `PipelineOutput` contract required by tests/eval; Langfuse runs as a parallel observability layer instead | — |
+| 11.6 | Verify in Langfuse dashboard | Run a benchmark pass, confirm traces appear in the Langfuse Cloud dashboard with correct nesting, token counts, latencies, and scores; document setup in README | `scripts/benchmark.py`, `README.md` |
+
+---
+
 ## Execution Order
 
 ```
@@ -150,6 +168,7 @@ EPIC 1 (Foundation)
                                 └─► EPIC 8 (Testing)
                                       └─► EPIC 9 (Documentation)
                                             └─► EPIC 10 (Optional: Multi-Turn)
+                                            └─► EPIC 11 (Langfuse Observability)  ← replaces EPIC 5 custom tracing
 ```
 
-**Estimated effort:** EPICs 1–9 fit within the 4–6 hour timebox. EPIC 10 is stretch.
+**Estimated effort:** EPICs 1–9 fit within the 4–6 hour timebox. EPIC 10 & 11 are stretch.
