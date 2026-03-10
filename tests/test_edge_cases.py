@@ -26,6 +26,8 @@ class TestEdgeCases(unittest.TestCase):
         p.db_path = Path("/tmp/nonexistent.sqlite")
         p.llm = mock_llm
         p.executor = MagicMock()
+        p.schema = {"tables": {}}
+        p._allowed_tables = set()
         p.executor.run.return_value = MagicMock(rows=[], row_count=0, timing_ms=0.0, error=None)
         return p
 
