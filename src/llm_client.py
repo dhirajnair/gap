@@ -34,6 +34,7 @@ class OpenRouterLLMClient:
         )
 
         usage = getattr(res, "usage", None)
+
         prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
         completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
         self._stats["llm_calls"] += 1
@@ -47,7 +48,31 @@ class OpenRouterLLMClient:
         content = getattr(getattr(choices[0], "message", None), "content", None)
         if not isinstance(content, str):
             raise RuntimeError("OpenRouter response content is not text.")
+
+        if prompt_tokens == 0:
+            prompt_tokens = self._estimate_tokens(messages)
+        if completion_tokens == 0:
+            completion_tokens = self._estimate_tokens_text(content)
+
+        self._stats["llm_calls"] += 1
+        self._stats["prompt_tokens"] += prompt_tokens
+        self._stats["completion_tokens"] += completion_tokens
+        self._stats["total_tokens"] += prompt_tokens + completion_tokens
+
         return content.strip()
+
+    @staticmethod
+    def _estimate_tokens_text(text: str) -> int:
+        """Rough token estimate: ~1.3 tokens per word."""
+        return max(1, int(len(text.split()) * 1.3))
+
+    @staticmethod
+    def _estimate_tokens(messages: list[dict[str, str]]) -> int:
+        total = 0
+        for msg in messages:
+            total += OpenRouterLLMClient._estimate_tokens_text(msg.get("content", ""))
+            total += 4  # per-message overhead
+        return total
 
     @staticmethod
     def _extract_sql(text: str) -> str | None:
