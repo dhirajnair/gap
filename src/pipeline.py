@@ -1,15 +1,29 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 import time
 from pathlib import Path
 
 from src.llm_client import OpenRouterLLMClient, build_default_llm_client
 from src.types import (
+    SQLGenerationOutput,
+    AnswerGenerationOutput,
     SQLValidationOutput,
     SQLExecutionOutput,
     PipelineOutput,
 )
+
+try:
+    from langfuse.decorators import observe, langfuse_context
+except ImportError:
+    def observe(*args, **kwargs):
+        def decorator(fn):
+            return fn
+        if args and callable(args[0]):
+            return args[0]
+        return decorator
+    langfuse_context = None
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -21,8 +35,17 @@ class SQLValidationError(Exception):
 
 
 class SQLValidator:
+    _BLOCKED_KEYWORDS = re.compile(
+        r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|ATTACH|DETACH|REPLACE)\b",
+        re.IGNORECASE,
+    )
+    _DANGEROUS_PATTERNS = re.compile(
+        r"\b(PRAGMA|sqlite_master|sqlite_temp_master)\b|--|/\*",
+        re.IGNORECASE,
+    )
+
     @classmethod
-    def validate(cls, sql: str | None) -> SQLValidationOutput:
+    def validate(cls, sql: str | None, db_path: Path | None = None, allowed_tables: set[str] | None = None) -> SQLValidationOutput:
         start = time.perf_counter()
 
         if sql is None:
@@ -33,18 +56,82 @@ class SQLValidator:
                 timing_ms=(time.perf_counter() - start) * 1000,
             )
 
-        # TODO: Implement SQL validation logic
-        # Consider what validation is needed for this use case
+        normalized = sql.strip().rstrip(";")
+
+        # Block non-SELECT statements
+        if not normalized.upper().startswith("SELECT"):
+            return SQLValidationOutput(
+                is_valid=False,
+                validated_sql=None,
+                error="Only SELECT statements are allowed",
+                timing_ms=(time.perf_counter() - start) * 1000,
+            )
+
+        # Block DML/DDL keywords
+        if cls._BLOCKED_KEYWORDS.search(normalized):
+            return SQLValidationOutput(
+                is_valid=False,
+                validated_sql=None,
+                error="Statement contains blocked keyword",
+                timing_ms=(time.perf_counter() - start) * 1000,
+            )
+
+        # Block dangerous patterns (PRAGMA, system tables, comments)
+        if cls._DANGEROUS_PATTERNS.search(normalized):
+            return SQLValidationOutput(
+                is_valid=False,
+                validated_sql=None,
+                error="Statement contains dangerous pattern",
+                timing_ms=(time.perf_counter() - start) * 1000,
+            )
+
+        # Block multi-statement (semicolons in the middle)
+        if ";" in normalized:
+            return SQLValidationOutput(
+                is_valid=False,
+                validated_sql=None,
+                error="Multiple statements not allowed",
+                timing_ms=(time.perf_counter() - start) * 1000,
+            )
+
+        # Table allowlist check
+        if allowed_tables:
+            from_match = re.findall(r'\bFROM\s+"?(\w+)"?', normalized, re.IGNORECASE)
+            join_match = re.findall(r'\bJOIN\s+"?(\w+)"?', normalized, re.IGNORECASE)
+            referenced = set(from_match + join_match)
+            disallowed = referenced - allowed_tables
+            if disallowed:
+                return SQLValidationOutput(
+                    is_valid=False,
+                    validated_sql=None,
+                    error=f"References disallowed table(s): {', '.join(sorted(disallowed))}",
+                    timing_ms=(time.perf_counter() - start) * 1000,
+                )
+
+        # Syntax validation via EXPLAIN
+        if db_path and db_path.exists():
+            try:
+                with sqlite3.connect(db_path) as conn:
+                    conn.execute(f"EXPLAIN {normalized}")
+            except sqlite3.Error as e:
+                return SQLValidationOutput(
+                    is_valid=False,
+                    validated_sql=None,
+                    error=f"SQL syntax error: {e}",
+                    timing_ms=(time.perf_counter() - start) * 1000,
+                )
 
         return SQLValidationOutput(
             is_valid=True,
-            validated_sql=sql,
+            validated_sql=normalized,
             error=None,
             timing_ms=(time.perf_counter() - start) * 1000,
         )
 
 
 class SQLiteExecutor:
+    _TIMEOUT_SECONDS = 30
+
     def __init__(self, db_path: str | Path = DEFAULT_DB_PATH) -> None:
         self.db_path = Path(db_path)
 
@@ -63,7 +150,8 @@ class SQLiteExecutor:
             )
 
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with sqlite3.connect(self.db_path, timeout=self._TIMEOUT_SECONDS) as conn:
+                conn.execute(f"PRAGMA busy_timeout = {self._TIMEOUT_SECONDS * 1000}")
                 conn.row_factory = sqlite3.Row
                 cur = conn.cursor()
                 cur.execute(sql)
@@ -82,41 +170,108 @@ class SQLiteExecutor:
         )
 
 
+def _load_schema(db_path: Path) -> dict:
+    """Extract table names, column names, and types from the SQLite database."""
+    schema: dict = {"tables": {}}
+    with sqlite3.connect(db_path) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        for (table_name,) in cur.fetchall():
+            cur.execute(f'PRAGMA table_info("{table_name}")')
+            columns = {row[1]: row[2] for row in cur.fetchall()}
+            schema["tables"][table_name] = columns
+    return schema
+
+
 class AnalyticsPipeline:
     def __init__(self, db_path: str | Path = DEFAULT_DB_PATH, llm_client: OpenRouterLLMClient | None = None) -> None:
         self.db_path = Path(db_path)
         self.llm = llm_client or build_default_llm_client()
         self.executor = SQLiteExecutor(self.db_path)
+        self._allowed_tables = self._get_table_names()
+        self.schema = _load_schema(self.db_path)
 
+    _MAX_QUESTION_LEN = 1000
+
+    def _empty_result(self, question: str, request_id: str | None, start: float, reason: str) -> PipelineOutput:
+        _zero_llm = {"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "model": "none"}
+        elapsed = (time.perf_counter() - start) * 1000
+        return PipelineOutput(
+            status="unanswerable", question=question, request_id=request_id,
+            sql_generation=SQLGenerationOutput(sql=None, timing_ms=0.0, llm_stats=_zero_llm, error=reason),
+            sql_validation=SQLValidationOutput(is_valid=False, validated_sql=None, error=reason),
+            sql_execution=SQLExecutionOutput(rows=[], row_count=0, timing_ms=0.0),
+            answer_generation=AnswerGenerationOutput(
+                answer=f"I cannot answer this with the available table and schema. Please rephrase using known survey fields.",
+                timing_ms=0.0, llm_stats=_zero_llm,
+            ),
+            sql=None, rows=[], answer="I cannot answer this with the available table and schema. Please rephrase using known survey fields.",
+            timings={"sql_generation_ms": 0, "sql_validation_ms": 0, "sql_execution_ms": 0, "answer_generation_ms": 0, "total_ms": elapsed},
+            total_llm_stats=_zero_llm,
+        )
+
+    def _get_table_names(self) -> set[str]:
+        if not self.db_path.exists():
+            return set()
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+            return {row[0] for row in cur.fetchall()}
+
+
+    @observe()
     def run(self, question: str, request_id: str | None = None) -> PipelineOutput:
+        if langfuse_context:
+            langfuse_context.update_current_trace(
+                name="pipeline-run",
+                input={"question": question},
+                metadata={"request_id": request_id},
+            )
+
         start = time.perf_counter()
 
+        question = (question or "").strip()
+        if not question:
+            return self._empty_result("", request_id, start, "Empty question")
+        if len(question) > self._MAX_QUESTION_LEN:
+            question = question[: self._MAX_QUESTION_LEN]
+
         # Stage 1: SQL Generation
-        sql_gen_output = self.llm.generate_sql(question, {})
+        sql_gen_output = self.llm.generate_sql(question, self.schema)
         sql = sql_gen_output.sql
 
         # Stage 2: SQL Validation
-        validation_output = SQLValidator.validate(sql)
+        validation_output = SQLValidator.validate(sql, db_path=self.db_path, allowed_tables=self._allowed_tables)
         if not validation_output.is_valid:
             sql = None
+
+        if langfuse_context:
+            langfuse_context.score_current_trace(
+                name="sql_validation",
+                value=1.0 if validation_output.is_valid else 0.0,
+                comment=validation_output.error,
+            )
 
         # Stage 3: SQL Execution
         execution_output = self.executor.run(sql)
         rows = execution_output.rows
+
+        # On execution error, clear sql/rows so answer gen handles gracefully
+        if execution_output.error:
+            sql = None
+            rows = []
 
         # Stage 4: Answer Generation
         answer_output = self.llm.generate_answer(question, sql, rows)
 
         # Determine status
         status = "success"
-        if sql_gen_output.sql is None and sql_gen_output.error:
+        if sql_gen_output.sql is None:
             status = "unanswerable"
         elif not validation_output.is_valid:
             status = "invalid_sql"
         elif execution_output.error:
             status = "error"
-        elif sql is None:
-            status = "unanswerable"
 
         # Build timings aggregate
         timings = {
@@ -135,6 +290,11 @@ class AnalyticsPipeline:
             "total_tokens": sql_gen_output.llm_stats.get("total_tokens", 0) + answer_output.llm_stats.get("total_tokens", 0),
             "model": sql_gen_output.llm_stats.get("model", "unknown"),
         }
+
+        if langfuse_context:
+            langfuse_context.update_current_trace(
+                output={"status": status, "answer": answer_output.answer, "sql": sql},
+            )
 
         return PipelineOutput(
             status=status,
