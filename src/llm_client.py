@@ -67,7 +67,7 @@ class OpenRouterLLMClient:
     """LLM client using the OpenRouter SDK for chat completions."""
 
     provider_name = "openrouter"
-    _SQL_MAX_TOKENS = 512
+    _SQL_MAX_TOKENS = 4096
     _ANSWER_MAX_TOKENS = 4096
 
     def __init__(self, api_key: str, model: str | None = None) -> None:
