@@ -20,8 +20,9 @@ Describe how you approached this assignment and what key problems you identified
 ```
 
 **What was your approach?**
-```
-Incremental EPICs (1–11), each building on the last:
+See [Addendum: EPIC Plan](SOLUTION_NOTES.md#addendum-epic-plan) for the full breakdown.
+
+In short, the solution followed **incremental EPICs (1–11)**, each building on the last:
 - Foundation fixes (dotenv, benchmark bug, pinned deps)
 - Token counting from API response with heuristic fallback
 - Schema introspection at init → compact schema in system prompt → structured JSON output
@@ -31,7 +32,6 @@ Incremental EPICs (1–11), each building on the last:
 - Prompt compression, result truncation, response caching
 - Comprehensive test suite (validation, extraction, edge cases, multi-turn)
 - Optional multi-turn conversation support via ConversationManager
-```
 
 ---
 
