@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import MagicMock, patch
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from src.pipeline import AnalyticsPipeline
-from src.types import PipelineOutput, UNANSWERABLE_MSG
+from src.types import UNANSWERABLE_MSG, PipelineOutput
 
 
 class TestEdgeCases(unittest.TestCase):

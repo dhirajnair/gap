@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import MagicMock
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from src.conversation import ConversationManager
 from src.pipeline import AnalyticsPipeline
