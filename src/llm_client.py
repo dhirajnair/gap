@@ -10,7 +10,7 @@ import time
 from collections import OrderedDict
 from typing import Any
 
-from src.types import SQLGenerationOutput, AnswerGenerationOutput, UNANSWERABLE_MSG
+from src.types import SQLGenerationOutput, AnswerGenerationOutput, UNANSWERABLE_MSG, MAX_ROWS_FOR_ANSWER
 
 try:
     from langfuse.decorators import observe, langfuse_context
@@ -260,7 +260,7 @@ class OpenRouterLLMClient:
             )
 
         system_prompt = "Answer concisely using only the provided data. Do not invent data."
-        sanitized = self._sanitize_rows(rows[:20])
+        sanitized = self._sanitize_rows(rows[:MAX_ROWS_FOR_ANSWER])
         user_prompt = (
             f"Q: {question}\nSQL: {sql}\n"
             f"Data: {json.dumps(sanitized, ensure_ascii=True)}\n"
