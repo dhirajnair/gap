@@ -28,6 +28,7 @@ class TestEdgeCases(unittest.TestCase):
         p.executor = MagicMock()
         p.schema = {"tables": {}}
         p._allowed_tables = set()
+        p._validation_conn = None
         p.executor.run.return_value = MagicMock(rows=[], row_count=0, timing_ms=0.0, error=None)
         return p
 

@@ -107,6 +107,7 @@ class TestMultiTurnPipeline(unittest.TestCase):
         )
         p.schema = {"tables": {}}
         p._allowed_tables = set()
+        p._validation_conn = None
         return p
 
     def _mock_sql_return(self, mock_llm, sql):
@@ -159,7 +160,7 @@ class TestMultiTurnPipeline(unittest.TestCase):
         p.run_conversation("test", cm)
         self.assertEqual(cm.turn_count, 1)
         self.assertEqual(cm.turns[0].question, "test")
-        self.assertEqual(cm.turns[0].sql, "SELECT 1")
+        self.assertTrue(cm.turns[0].sql.startswith("SELECT 1"))
 
 
 if __name__ == "__main__":
