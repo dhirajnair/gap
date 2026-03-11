@@ -5,7 +5,6 @@ import json
 import logging
 import os
 import re
-import threading
 import time
 from collections import OrderedDict
 from typing import Any
@@ -60,12 +59,15 @@ class _LRUCache:
 
 
 _MD_SQL_RE = re.compile(r"```(?:sql|json)?\s*\n?(.*?)```", re.DOTALL)
+_CONTROL_CHARS_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
 
 
 class OpenRouterLLMClient:
     """LLM client using the OpenRouter SDK for chat completions."""
 
     provider_name = "openrouter"
+    _SQL_MAX_TOKENS = 512
+    _ANSWER_MAX_TOKENS = 4096
 
     def __init__(self, api_key: str, model: str | None = None) -> None:
         try:
@@ -74,21 +76,21 @@ class OpenRouterLLMClient:
             raise RuntimeError("Missing dependency: install 'openrouter'.") from exc
         self.model = model or os.getenv("OPENROUTER_MODEL", DEFAULT_MODEL)
         self._client = OpenRouter(api_key=api_key)
-        self._stats = {"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        self._stats_lock = threading.Lock()
         self._cache = _LRUCache(_CACHE_MAX_SIZE)
 
     _MAX_RETRIES = 2
     _RETRY_BACKOFF = 1.0
 
+    _ZERO_STATS: dict[str, int] = {"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
     @observe(as_type="generation")
-    def _chat(self, messages: list[dict[str, str]], temperature: float, max_tokens: int) -> str:
+    def _chat(self, messages: list[dict[str, str]], temperature: float, max_tokens: int) -> tuple[str, dict[str, int]]:
         raw = json.dumps(messages, sort_keys=True) + f"|t={temperature}|m={max_tokens}"
         cache_key = hashlib.sha256(raw.encode()).hexdigest()
         cached = self._cache.get(cache_key)
         if cached is not None:
             logger.debug("Cache hit for prompt (key=%s…)", cache_key[:12])
-            return cached
+            return cached, dict(self._ZERO_STATS)
 
         for attempt in range(1 + self._MAX_RETRIES):
             try:
@@ -132,11 +134,12 @@ class OpenRouterLLMClient:
         if completion_tokens == 0:
             completion_tokens = self._estimate_tokens_text(content)
 
-        with self._stats_lock:
-            self._stats["llm_calls"] += 1
-            self._stats["prompt_tokens"] += prompt_tokens
-            self._stats["completion_tokens"] += completion_tokens
-            self._stats["total_tokens"] += prompt_tokens + completion_tokens
+        call_stats = {
+            "llm_calls": 1,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
 
         logger.info("LLM response: prompt_tokens=%d completion_tokens=%d", prompt_tokens, completion_tokens)
 
@@ -147,7 +150,7 @@ class OpenRouterLLMClient:
                 metadata={"temperature": temperature, "max_tokens": max_tokens},
             )
 
-        return result
+        return result, call_stats
 
     @staticmethod
     def _estimate_tokens_text(text: str) -> int:
@@ -183,7 +186,7 @@ class OpenRouterLLMClient:
                 pass
 
         lower = cleaned.lower()
-        for keyword in ("select ", "delete ", "insert ", "update ", "drop ", "alter ", "create "):
+        for keyword in ("select ", "with "):
             idx = lower.find(keyword)
             if idx >= 0:
                 sql = cleaned[idx:].rstrip(";").strip()
@@ -216,13 +219,15 @@ class OpenRouterLLMClient:
         start = time.perf_counter()
         error = None
         sql = None
+        sanitized_q = _CONTROL_CHARS_RE.sub('', question)
 
+        llm_stats = dict(self._ZERO_STATS)
         try:
-            logger.info("Generating SQL for question: %.80s…", question)
-            text = self._chat(
-                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": question}],
+            logger.info("Generating SQL for question: %.80s…", sanitized_q)
+            text, llm_stats = self._chat(
+                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": sanitized_q}],
                 temperature=0.0,
-                max_tokens=4096,
+                max_tokens=self._SQL_MAX_TOKENS,
             )
             sql = self._extract_sql(text)
             if sql is None:
@@ -232,7 +237,6 @@ class OpenRouterLLMClient:
             logger.error("SQL generation failed: %s", error)
 
         timing_ms = (time.perf_counter() - start) * 1000
-        llm_stats = self.pop_stats()
         llm_stats["model"] = self.model
 
         return SQLGenerationOutput(
@@ -241,11 +245,6 @@ class OpenRouterLLMClient:
             llm_stats=llm_stats,
             error=error,
         )
-
-    @staticmethod
-    def _sanitize_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Pass rows through for LLM consumption; None becomes JSON null via json.dumps."""
-        return rows
 
     @observe()
     def generate_answer(self, question: str, sql: str | None, rows: list[dict[str, Any]]) -> AnswerGenerationOutput:
@@ -260,22 +259,23 @@ class OpenRouterLLMClient:
             )
 
         system_prompt = "Answer concisely using only the provided data. Do not invent data."
-        sanitized = self._sanitize_rows(rows[:20])
+        sanitized_q = _CONTROL_CHARS_RE.sub('', question)
         user_prompt = (
-            f"Q: {question}\nSQL: {sql}\n"
-            f"Data: {json.dumps(sanitized, ensure_ascii=True)}\n"
+            f"Q: {sanitized_q}\nSQL: {sql}\n"
+            f"Data: {json.dumps(rows[:20], ensure_ascii=True)}\n"
             "Answer:"
         )
 
         start = time.perf_counter()
         error = None
         answer = ""
+        llm_stats = dict(self._ZERO_STATS)
 
         try:
-            answer = self._chat(
+            answer, llm_stats = self._chat(
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
                 temperature=0.2,
-                max_tokens=4096,
+                max_tokens=self._ANSWER_MAX_TOKENS,
             )
         except Exception as exc:
             error = str(exc)
@@ -283,7 +283,6 @@ class OpenRouterLLMClient:
             logger.error("Answer generation failed: %s", error)
 
         timing_ms = (time.perf_counter() - start) * 1000
-        llm_stats = self.pop_stats()
         llm_stats["model"] = self.model
 
         return AnswerGenerationOutput(
@@ -292,18 +291,6 @@ class OpenRouterLLMClient:
             llm_stats=llm_stats,
             error=error,
         )
-
-    def pop_stats(self) -> dict[str, Any]:
-        with self._stats_lock:
-            out = {
-                "llm_calls": self._stats["llm_calls"],
-                "prompt_tokens": self._stats["prompt_tokens"],
-                "completion_tokens": self._stats["completion_tokens"],
-                "total_tokens": self._stats["total_tokens"],
-            }
-            self._stats = {"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        return out
-
 
 def build_default_llm_client() -> OpenRouterLLMClient:
     api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
