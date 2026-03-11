@@ -77,6 +77,7 @@ class TestConversationManager(unittest.TestCase):
         self.assertIn("Conversation history:", prompt)
         self.assertIn("Q1:", prompt)
         self.assertIn("SQL1:", prompt)
+        self.assertIn("A1:", prompt)
         self.assertIn("Follow-up question: What about males specifically?", prompt)
 
     def test_history_limited_to_last_3(self):
