@@ -40,6 +40,13 @@ class TestExtractSQL(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertTrue(result.lower().startswith("select"))
 
+    def test_json_trailing_brace_stripped(self):
+        """Trailing } in sql value (from malformed LLM output) is stripped."""
+        result = OpenRouterLLMClient._extract_sql('{"sql": "SELECT 1 FROM t}"}')
+        self.assertIsNotNone(result)
+        self.assertFalse(result.endswith("}"))
+        self.assertEqual(result, "SELECT 1 FROM t")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -68,6 +68,33 @@ class TestSQLValidator(unittest.TestCase):
         result = SQLValidator.validate("ATTACH DATABASE ':memory:' AS evil")
         self.assertFalse(result.is_valid)
 
+    def test_reject_invalid_qualified_column(self):
+        schema = {"gaming_mental_health": {"age", "gender", "addiction_level"}}
+        result = SQLValidator.validate(
+            "SELECT gaming_mental_health.nonexistent_col FROM gaming_mental_health",
+            schema_columns=schema,
+        )
+        self.assertFalse(result.is_valid)
+        self.assertIn("nonexistent_col", result.error)
+        self.assertIn("does not exist", result.error)
+
+    def test_reject_invalid_column_in_aggregate(self):
+        schema = {"gaming_mental_health": {"age", "gender"}}
+        result = SQLValidator.validate(
+            "SELECT AVG(bad_column) FROM gaming_mental_health",
+            schema_columns=schema,
+        )
+        self.assertFalse(result.is_valid)
+        self.assertIn("bad_column", result.error)
+
+    def test_accept_valid_columns_with_schema(self):
+        schema = {"gaming_mental_health": {"age", "gender", "addiction_level"}}
+        result = SQLValidator.validate(
+            "SELECT age, AVG(addiction_level) FROM gaming_mental_health WHERE gender = 'M'",
+            schema_columns=schema,
+        )
+        self.assertTrue(result.is_valid)
+
 
 if __name__ == "__main__":
     unittest.main()

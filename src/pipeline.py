@@ -1,34 +1,35 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 import re
 import sqlite3
 import time
 import uuid
 from pathlib import Path
 
-from src.llm_client import OpenRouterLLMClient, build_default_llm_client
 from src.conversation import ConversationManager
+from src.llm_client import OpenRouterLLMClient, build_default_llm_client
 from src.types import (
-    SQLGenerationOutput,
-    AnswerGenerationOutput,
-    SQLValidationOutput,
-    SQLExecutionOutput,
-    PipelineOutput,
-    UNANSWERABLE_MSG,
     MAX_ROWS_FOR_ANSWER,
+    UNANSWERABLE_MSG,
+    AnswerGenerationOutput,
+    PipelineOutput,
+    SQLExecutionOutput,
+    SQLGenerationOutput,
+    SQLValidationOutput,
 )
 
 try:
-    from langfuse.decorators import observe, langfuse_context
+    from langfuse.decorators import langfuse_context, observe  # type: ignore[import-untyped]
 except ImportError:
-    def observe(*args, **kwargs):
-        def decorator(fn):
+    def observe(*args: Any, **kwargs: Any) -> Any:
+        def decorator(fn: Any) -> Any:
             return fn
         if args and callable(args[0]):
             return args[0]
         return decorator
-    langfuse_context = None
+    langfuse_context = None  # type: ignore[no-redef]
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +52,54 @@ class SQLValidator:
         r"\b(PRAGMA|sqlite_master|sqlite_temp_master)\b|--|/\*",
         re.IGNORECASE,
     )
+    _QUALIFIED_COL_RE = re.compile(r"\b(\w+)\.(\w+)\b")
+    _AGG_COL_RE = re.compile(
+        r"\b(?:AVG|SUM|MIN|MAX|COUNT)\s*\(\s*(\w+)\s*\)",
+        re.IGNORECASE,
+    )
 
     @classmethod
-    def validate(cls, sql: str | None, db_path: Path | None = None, allowed_tables: set[str] | None = None, conn: sqlite3.Connection | None = None) -> SQLValidationOutput:
+    def _validate_columns(
+        cls,
+        sql: str,
+        schema_columns: dict[str, set[str]],
+    ) -> str | None:
+        """Validate that referenced columns exist in schema. Returns error message or None if valid."""
+        if not schema_columns:
+            return None
+        tables_lower = {t.lower(): t for t in schema_columns}
+        all_columns: set[str] = set()
+        for cols in schema_columns.values():
+            all_columns.update(c.lower() for c in cols)
+
+        # Qualified: table.column
+        for table_part, col_part in cls._QUALIFIED_COL_RE.findall(sql):
+            tbl_key = table_part.lower()
+            if tbl_key not in tables_lower:
+                continue  # Skip CTE aliases, etc.
+            canonical_table = tables_lower[tbl_key]
+            valid_cols = {c.lower() for c in schema_columns[canonical_table]}
+            if col_part.lower() not in valid_cols and col_part != "*":
+                return f"Column '{col_part}' does not exist in table '{canonical_table}'"
+
+        # Unqualified in aggregates: AVG(col), SUM(col), etc. (excludes COUNT(*))
+        for col in cls._AGG_COL_RE.findall(sql):
+            if col.lower() == "*":
+                continue
+            if col.lower() not in all_columns:
+                return f"Column '{col}' does not exist in any referenced table"
+
+        return None
+
+    @classmethod
+    def validate(
+        cls,
+        sql: str | None,
+        db_path: Path | None = None,
+        allowed_tables: set[str] | None = None,
+        schema_columns: dict[str, set[str]] | None = None,
+        conn: sqlite3.Connection | None = None,
+    ) -> SQLValidationOutput:
         start = time.perf_counter()
 
         if sql is None:
@@ -62,7 +108,7 @@ class SQLValidator:
                 error="No SQL provided", timing_ms=(time.perf_counter() - start) * 1000,
             )
 
-        normalized = sql.strip().rstrip(";")
+        normalized = sql.strip().rstrip(";}").strip()
 
         if not normalized.upper().startswith(("SELECT", "WITH")):
             logger.warning("SQL rejected: not a SELECT — %.60s", normalized)
@@ -110,6 +156,17 @@ class SQLValidator:
                 return SQLValidationOutput(
                     is_valid=False, validated_sql=None,
                     error=f"References disallowed table(s): {', '.join(sorted(disallowed))}",
+                    timing_ms=(time.perf_counter() - start) * 1000,
+                )
+
+        # Column-level validation: ensure referenced columns exist in schema
+        if schema_columns:
+            col_error = cls._validate_columns(normalized, schema_columns)
+            if col_error:
+                logger.warning("SQL rejected: invalid column — %s", col_error)
+                return SQLValidationOutput(
+                    is_valid=False, validated_sql=None,
+                    error=col_error,
                     timing_ms=(time.perf_counter() - start) * 1000,
                 )
 
@@ -289,7 +346,17 @@ class AnalyticsPipeline:
         sql = sql_gen_output.sql
 
         # Stage 2: SQL Validation
-        validation_output = SQLValidator.validate(sql, db_path=self.db_path, allowed_tables=self._allowed_tables, conn=self._validation_conn)
+        schema_columns = (
+            {t: set(cols.keys()) for t, cols in self.schema.get("tables", {}).items()}
+            if self.schema else None
+        )
+        validation_output = SQLValidator.validate(
+            sql,
+            db_path=self.db_path,
+            allowed_tables=self._allowed_tables,
+            schema_columns=schema_columns,
+            conn=self._validation_conn,
+        )
         if not validation_output.is_valid:
             sql = None
         else:
@@ -402,6 +469,6 @@ class AnalyticsPipeline:
         if len(raw) > self._MAX_QUESTION_LEN:
             raw = raw[: self._MAX_QUESTION_LEN]
         enriched = conversation.build_context_prompt(raw)
-        result = self.run(enriched, request_id=request_id, _max_input_len=self._MAX_ENRICHED_LEN)
+        result: PipelineOutput = self.run(enriched, request_id=request_id, _max_input_len=self._MAX_ENRICHED_LEN)
         conversation.add_turn(raw, result.sql, result.answer)
         return result

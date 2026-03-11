@@ -10,18 +10,18 @@ import time
 from collections import OrderedDict
 from typing import Any
 
-from src.types import SQLGenerationOutput, AnswerGenerationOutput, UNANSWERABLE_MSG, MAX_ROWS_FOR_ANSWER
+from src.types import MAX_ROWS_FOR_ANSWER, UNANSWERABLE_MSG, AnswerGenerationOutput, SQLGenerationOutput
 
 try:
-    from langfuse.decorators import observe, langfuse_context
+    from langfuse.decorators import langfuse_context, observe  # type: ignore[import-untyped]
 except ImportError:
-    def observe(*args, **kwargs):
-        def decorator(fn):
+    def observe(*args: Any, **kwargs: Any) -> Any:
+        def decorator(fn: Any) -> Any:
             return fn
         if args and callable(args[0]):
             return args[0]
         return decorator
-    langfuse_context = None
+    langfuse_context = None  # type: ignore[no-redef]
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +96,7 @@ class OpenRouterLLMClient:
         for attempt in range(1 + self._MAX_RETRIES):
             try:
                 logger.info("LLM call attempt %d/%d model=%s", attempt + 1, 1 + self._MAX_RETRIES, self.model)
-                res = self._client.chat.send(
+                res = self._client.chat.send(  # type: ignore[call-overload]
                     messages=messages,
                     model=self.model,
                     temperature=temperature,
@@ -181,7 +181,8 @@ class OpenRouterLLMClient:
                 if sql is None:
                     return None
                 if isinstance(sql, str) and sql.strip():
-                    return sql.strip()
+                    # Strip trailing } from malformed JSON (e.g. {"sql":"...";})
+                    return sql.strip().rstrip('}').strip()
                 return None
             except json.JSONDecodeError:
                 pass
@@ -190,7 +191,7 @@ class OpenRouterLLMClient:
         for keyword in ("select ", "with "):
             idx = lower.find(keyword)
             if idx >= 0:
-                sql = cleaned[idx:].rstrip(";").strip()
+                sql = cleaned[idx:].rstrip(";}").strip()
                 return sql if sql else None
         return None
 
@@ -222,7 +223,7 @@ class OpenRouterLLMClient:
         sql = None
         sanitized_q = _CONTROL_CHARS_RE.sub('', question)
 
-        llm_stats = dict(self._ZERO_STATS)
+        llm_stats: dict[str, Any] = dict(self._ZERO_STATS)
         try:
             logger.info("Generating SQL for question: %.80s…", sanitized_q)
             text, llm_stats = self._chat(
@@ -270,7 +271,7 @@ class OpenRouterLLMClient:
         start = time.perf_counter()
         error = None
         answer = ""
-        llm_stats = dict(self._ZERO_STATS)
+        llm_stats: dict[str, Any] = dict(self._ZERO_STATS)
 
         try:
             answer, llm_stats = self._chat(

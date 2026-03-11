@@ -51,7 +51,7 @@ Incremental EPICs (1–11), each building on the last:
 ## Validation & Quality Assurance
 
 - [x] **SQL validation**
-  - Description: Multi-layer validation in `SQLValidator`: (1) SELECT/WITH-only gate, (2) DML/DDL keyword blocklist, (3) dangerous pattern detection (PRAGMA, system tables, comments), (4) multi-statement rejection, (5) table allowlist check, (6) syntax validation via `EXPLAIN`. Each rejection returns a specific error message.
+  - Description: Multi-layer validation in `SQLValidator`: (1) SELECT/WITH-only gate, (2) DML/DDL keyword blocklist, (3) dangerous pattern detection (PRAGMA, system tables, comments), (4) multi-statement rejection, (5) table allowlist check, (6) column allowlist check (validates `table.column` and columns in aggregates exist in schema), (7) syntax validation via `EXPLAIN`. Each rejection returns a specific error message.
 
 - [x] **Answer quality**
   - Description: Structured JSON output (`{"sql": "..."}`) for reliable SQL extraction. System prompt constrains the LLM to use only provided data. Answer generation receives truncated rows (max 20) with None preserved as JSON null. Answer quality checks: (1) warns on suspiciously short answers when data is available, (2) verifies numeric values (rounded to 2 d.p. for floats) from SQL results appear in the generated answer (hallucination detection). Unanswerable questions return a clear explanation rather than hallucinated SQL.
@@ -96,7 +96,7 @@ Incremental EPICs (1–11), each building on the last:
 ## Testing
 
 - [x] **Unit tests**
-  - Description: `test_validation.py` (14 tests — each validation rule), `test_llm_client.py` (8 tests — SQL extraction from JSON, markdown, raw text), `test_token_counting.py` (4 tests — estimation, accumulation, pop_stats reset), `test_cache_and_retry.py` (8 tests — LRU cache, retry, cache integration), `test_result_validation.py` (6 tests — result sanity checks).
+  - Description: `test_validation.py` (17 tests — each validation rule, including column allowlist), `test_llm_client.py` (8 tests — SQL extraction from JSON, markdown, raw text), `test_token_counting.py` (4 tests — estimation, accumulation, pop_stats reset), `test_cache_and_retry.py` (8 tests — LRU cache, retry, cache integration), `test_result_validation.py` (6 tests — result sanity checks).
 
 - [x] **Integration tests**
   - Description: `test_public.py` (5 tests — answerable prompt, invalid SQL rejection, output contract, timings, unanswerable handling). All pass with live LLM calls.
@@ -164,7 +164,7 @@ pronoun, pattern, and conjunction follow-ups.
 ```
 - Follow-up detection is heuristic — an LLM-based classifier would improve accuracy.
 - Response cache is in-memory LRU (per-process, 128 entries) — Redis/disk cache for multi-process deployments.
-- No column-level validation in SQL (only table-level allowlist).
+- Column validation covers qualified (table.col) and aggregate columns; bare SELECT columns rely on EXPLAIN.
 - No rate limiting or cost tracking beyond Langfuse token counts.
 - Benchmark numbers are model-dependent; results vary with OpenRouter load.
 ```
