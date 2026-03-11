@@ -52,7 +52,7 @@ class SQLValidator:
     )
 
     @classmethod
-    def validate(cls, sql: str | None, db_path: Path | None = None, allowed_tables: set[str] | None = None) -> SQLValidationOutput:
+    def validate(cls, sql: str | None, db_path: Path | None = None, allowed_tables: set[str] | None = None, conn: sqlite3.Connection | None = None) -> SQLValidationOutput:
         start = time.perf_counter()
 
         if sql is None:
@@ -110,16 +110,21 @@ class SQLValidator:
                     timing_ms=(time.perf_counter() - start) * 1000,
                 )
 
-        if db_path and db_path.exists():
+        _conn = conn
+        if _conn is None and db_path and db_path.exists():
+            _conn = sqlite3.connect(db_path)
+        if _conn is not None:
             try:
-                with sqlite3.connect(db_path) as conn:
-                    conn.execute("EXPLAIN " + normalized)
+                _conn.execute("EXPLAIN " + normalized)
             except sqlite3.Error as e:
                 logger.warning("SQL syntax error: %s", e)
                 return SQLValidationOutput(
                     is_valid=False, validated_sql=None,
                     error=f"SQL syntax error: {e}", timing_ms=(time.perf_counter() - start) * 1000,
                 )
+            finally:
+                if conn is None and _conn is not None:
+                    _conn.close()
 
         logger.debug("SQL validated OK: %.80s", normalized)
         return SQLValidationOutput(
@@ -210,9 +215,11 @@ class AnalyticsPipeline:
         self.llm = llm_client or build_default_llm_client()
         self.executor = SQLiteExecutor(self.db_path)
         self._allowed_tables = self._get_table_names()
+        self._validation_conn = sqlite3.connect(self.db_path) if self.db_path.exists() else None
         self.schema = self._load_schema()
 
     _MAX_QUESTION_LEN = 1000
+    _MAX_ENRICHED_LEN = 4000
 
     def _empty_result(self, question: str, request_id: str | None, start: float, reason: str) -> PipelineOutput:
         _zero_llm = {"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "model": self.llm.model}
@@ -254,7 +261,7 @@ class AnalyticsPipeline:
         return schema
 
     @observe()
-    def run(self, question: str, request_id: str | None = None) -> PipelineOutput:
+    def run(self, question: str, request_id: str | None = None, *, _max_input_len: int = 0) -> PipelineOutput:
         if request_id is None:
             request_id = uuid.uuid4().hex[:12]
         if langfuse_context:
@@ -270,17 +277,22 @@ class AnalyticsPipeline:
         question = (question or "").strip()
         if not question:
             return self._empty_result("", request_id, start, "Empty question")
-        if len(question) > self._MAX_QUESTION_LEN:
-            question = question[: self._MAX_QUESTION_LEN]
+        _limit = _max_input_len or self._MAX_QUESTION_LEN
+        if len(question) > _limit:
+            question = question[:_limit]
 
         # Stage 1: SQL Generation
         sql_gen_output = self.llm.generate_sql(question, self.schema)
         sql = sql_gen_output.sql
 
         # Stage 2: SQL Validation
-        validation_output = SQLValidator.validate(sql, db_path=self.db_path, allowed_tables=self._allowed_tables)
+        validation_output = SQLValidator.validate(sql, db_path=self.db_path, allowed_tables=self._allowed_tables, conn=self._validation_conn)
         if not validation_output.is_valid:
             sql = None
+        else:
+            sql = validation_output.validated_sql
+            if sql and not re.search(r'\bLIMIT\b', sql, re.IGNORECASE):
+                sql = sql + f" LIMIT {_MAX_ROWS_FOR_ANSWER}"
 
         if langfuse_context:
             langfuse_context.score_current_trace(
@@ -383,7 +395,10 @@ class AnalyticsPipeline:
         request_id: str | None = None,
     ) -> PipelineOutput:
         """Run a question through the pipeline with multi-turn conversation context."""
-        enriched = conversation.build_context_prompt(question)
-        result = self.run(enriched, request_id=request_id)
-        conversation.add_turn(question, result.sql, result.answer)
+        raw = (question or "").strip()
+        if len(raw) > self._MAX_QUESTION_LEN:
+            raw = raw[: self._MAX_QUESTION_LEN]
+        enriched = conversation.build_context_prompt(raw)
+        result = self.run(enriched, request_id=request_id, _max_input_len=self._MAX_ENRICHED_LEN)
+        conversation.add_turn(raw, result.sql, result.answer)
         return result
