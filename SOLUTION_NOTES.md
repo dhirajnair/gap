@@ -145,3 +145,29 @@ Changes driven by strict audit against README requirements (see `temp/ITERATION3
 |------|--------|
 | `LANGFUSE_BASE_URL` env var | Works correctly with the Langfuse SDK — no mismatch. |
 | `max_tokens=4096` | Required for reasoning models that fill available context; model stops at EOS regardless. |
+
+---
+
+## Iteration 4 (strict audit fixes)
+
+Changes driven by strict audit against README requirements (see `temp/ITERATION4.md`).
+
+### What Changed
+
+| Change | Files | Why |
+|--------|-------|-----|
+| Stripped real API keys from `.env` | `.env` | **CRITICAL** — plaintext secrets on disk would leak if project is submitted as archive. Replaced with placeholders. |
+| Pre-compiled regex in `_extract_sql()` | `src/llm_client.py` | `import re` was inside the method (re-imported every call) and regex was recompiled per invocation. Moved `re` to top-level import; regex compiled as module-level `_MD_SQL_RE` constant. |
+| Cache key includes temperature + max_tokens | `src/llm_client.py` | Cache was keyed only on messages — same messages with different temperature would return stale result. Now includes `temperature` and `max_tokens` in the hash. |
+| Moved `load_dotenv()` to explicit entry points | `src/__init__.py`, `scripts/benchmark.py`, `tests/conftest.py` | `load_dotenv()` ran as module-level side effect on any `import src`, depending on CWD and causing file I/O on import. Now called explicitly via `init_env()` in benchmark and test setup. |
+| Fixed CHECKLIST `PLAN.md` reference | `CHECKLIST.md` | Referenced non-existent `PLAN.md`. Removed the stale reference. |
+| Fixed `ResultValidator` false-positive on grouping columns | `src/pipeline.py` | Non-numeric check fired on all columns when AVG/SUM present, including GROUP BY keys (e.g. `gender`). Now only fires on columns whose alias matches an aggregation function result. |
+| Disclosed cache-inflated benchmark p50 | `CHECKLIST.md` | p50 of 351 ms reflected cache hits from repeated runs, not cold-start latency. Added prominent note explaining this. |
+
+### Not Changed (by design)
+
+| Item | Reason |
+|------|--------|
+| `max_tokens` parameter in `_chat()` | Both callers pass 4096 — effectively fixed, parameter is used (not hardcoded). Keeping it for future flexibility. |
+| SQLite connection reuse | Single-user use case; connection pooling adds complexity with no measurable benefit. |
+| `conftest.py` sys.path hack | `pyproject.toml` editable install is cleaner but changes project structure. Out of scope. |

@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import threading
 import time
 from collections import OrderedDict
@@ -58,6 +59,9 @@ class _LRUCache:
             return len(self._data)
 
 
+_MD_SQL_RE = re.compile(r"```(?:sql|json)?\s*\n?(.*?)```", re.DOTALL)
+
+
 class OpenRouterLLMClient:
     """LLM client using the OpenRouter SDK for chat completions."""
 
@@ -79,7 +83,8 @@ class OpenRouterLLMClient:
 
     @observe(as_type="generation")
     def _chat(self, messages: list[dict[str, str]], temperature: float, max_tokens: int) -> str:
-        cache_key = hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).hexdigest()
+        raw = json.dumps(messages, sort_keys=True) + f"|t={temperature}|m={max_tokens}"
+        cache_key = hashlib.sha256(raw.encode()).hexdigest()
         cached = self._cache.get(cache_key)
         if cached is not None:
             logger.debug("Cache hit for prompt (key=%s…)", cache_key[:12])
@@ -159,10 +164,9 @@ class OpenRouterLLMClient:
 
     @staticmethod
     def _extract_sql(text: str) -> str | None:
-        import re
         cleaned = text.strip()
 
-        md_match = re.search(r"```(?:sql|json)?\s*\n?(.*?)```", cleaned, re.DOTALL)
+        md_match = _MD_SQL_RE.search(cleaned)
         if md_match:
             cleaned = md_match.group(1).strip()
 
