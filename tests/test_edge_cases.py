@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 from pathlib import Path
 
 from src.pipeline import AnalyticsPipeline
-from src.types import PipelineOutput
+from src.types import PipelineOutput, UNANSWERABLE_MSG
 
 
 class TestEdgeCases(unittest.TestCase):
@@ -18,7 +18,7 @@ class TestEdgeCases(unittest.TestCase):
             llm_stats={"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "model": "test"},
         )
         mock_llm.generate_answer.return_value = MagicMock(
-            answer="I cannot answer this with the available table and schema. Please rephrase using known survey fields.",
+            answer=UNANSWERABLE_MSG,
             timing_ms=0.0, error=None,
             llm_stats={"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "model": "test"},
         )
