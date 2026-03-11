@@ -68,8 +68,6 @@ class ConversationManager:
             return True
         if _FOLLOWUP_PATTERNS.search(q):
             return True
-        if len(q.split()) <= 4:
-            return True
 
         return False
 

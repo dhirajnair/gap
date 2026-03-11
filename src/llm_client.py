@@ -197,7 +197,10 @@ class OpenRouterLLMClient:
             return ""
         parts = []
         for tbl, cols in tables.items():
-            col_str = ",".join(cols.keys()) if isinstance(cols, dict) else str(cols)
+            if isinstance(cols, dict):
+                col_str = ",".join(f"{c}:{t}" for c, t in cols.items())
+            else:
+                col_str = str(cols)
             parts.append(f"{tbl}({col_str})")
         return ";".join(parts)
 
@@ -241,8 +244,8 @@ class OpenRouterLLMClient:
 
     @staticmethod
     def _sanitize_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Replace None values with readable placeholders for LLM consumption."""
-        return [{k: ("N/A" if v is None else v) for k, v in row.items()} for row in rows]
+        """Pass rows through for LLM consumption; None becomes JSON null via json.dumps."""
+        return rows
 
     @observe()
     def generate_answer(self, question: str, sql: str | None, rows: list[dict[str, Any]]) -> AnswerGenerationOutput:

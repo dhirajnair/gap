@@ -51,9 +51,9 @@ class TestConversationManager(unittest.TestCase):
         self.cm.add_turn("q", "s", "a")
         self.assertTrue(self.cm.is_followup("Now sort by anxiety score"))
 
-    def test_short_question_is_followup(self):
+    def test_short_question_not_followup(self):
         self.cm.add_turn("q", "s", "a")
-        self.assertTrue(self.cm.is_followup("Only males"))
+        self.assertFalse(self.cm.is_followup("Only males"))
 
     def test_standalone_question_not_followup(self):
         self.cm.add_turn("q", "s", "a")

@@ -54,7 +54,7 @@ Incremental EPICs (1–11), each building on the last:
   - Description: Multi-layer validation in `SQLValidator`: (1) SELECT/WITH-only gate, (2) DML/DDL keyword blocklist, (3) dangerous pattern detection (PRAGMA, system tables, comments), (4) multi-statement rejection, (5) table allowlist check, (6) syntax validation via `EXPLAIN`. Each rejection returns a specific error message.
 
 - [x] **Answer quality**
-  - Description: Structured JSON output (`{"sql": "..."}`) for reliable SQL extraction. System prompt constrains the LLM to use only provided data. Answer generation receives truncated rows (max 20) with None→"N/A" sanitization via `_sanitize_rows()`. Answer quality checks: (1) warns on suspiciously short answers when data is available, (2) verifies numeric values from SQL results appear in the generated answer (hallucination detection). Unanswerable questions return a clear explanation rather than hallucinated SQL.
+  - Description: Structured JSON output (`{"sql": "..."}`) for reliable SQL extraction. System prompt constrains the LLM to use only provided data. Answer generation receives truncated rows (max 20) with None preserved as JSON null. Answer quality checks: (1) warns on suspiciously short answers when data is available, (2) verifies numeric values (rounded to 2 d.p. for floats) from SQL results appear in the generated answer (hallucination detection). Unanswerable questions return a clear explanation rather than hallucinated SQL.
 
 - [x] **Result validation**
   - Description: `ResultValidator` performs analytics sanity checks on SQL execution results: column consistency across rows, negative-count detection for COUNT aggregations, and non-numeric value detection in AVG/SUM aggregation columns. Warnings are logged but do not block the pipeline.
@@ -86,7 +86,7 @@ Incremental EPICs (1–11), each building on the last:
 ## LLM Efficiency
 
 - [x] **Token usage optimization**
-  - Description: Compact schema representation (`table(col1,col2,...)` instead of verbose text). Terse system prompts. Result truncation to 20 rows before answer generation. JSON-only output format eliminates verbose explanations.
+  - Description: Compact schema with types (`table(col1:INTEGER,col2:TEXT,...)`) for accurate SQL generation. Terse system prompts. Result truncation to 20 rows before answer generation. JSON-only output format eliminates verbose explanations.
 
 - [x] **Efficient LLM requests**
   - Description: Bounded LRU response cache (128 entries, hash-keyed on messages + temperature + max_tokens) eliminates duplicate LLM calls. Schema cached at init. Fetch limit aligned to 20 rows (matches answer generation usage — no wasted fetching). max_tokens=4096 accommodates reasoning models (model stops at EOS). Thread-safe stats with `threading.Lock`.
@@ -114,7 +114,7 @@ Incremental EPICs (1–11), each building on the last:
 **Only complete this section if you implemented the optional follow-up questions feature.**
 
 - [x] **Intent detection for follow-ups**
-  - Description: Heuristic-based detection in `ConversationManager.is_followup()`: checks pronoun starts (it, they, that), conjunction starts (and, but, now), follow-up patterns (what about, now sort, instead, drill down), and short questions (≤4 words). No extra LLM call needed.
+  - Description: Heuristic-based detection in `ConversationManager.is_followup()`: checks pronoun starts (it, they, that), conjunction starts (and, but, now), and follow-up patterns (what about, now sort, instead, drill down). No extra LLM call needed.
 
 - [x] **Context-aware SQL generation**
   - Description: `build_context_prompt()` prepends last 3 turns (question + SQL) as conversation history to the follow-up question, then feeds the enriched prompt through the normal `generate_sql()` path. The SQL generator sees full context to resolve references.

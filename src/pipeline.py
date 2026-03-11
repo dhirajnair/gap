@@ -4,6 +4,7 @@ import logging
 import re
 import sqlite3
 import time
+import uuid
 from pathlib import Path
 
 from src.llm_client import OpenRouterLLMClient, build_default_llm_client
@@ -92,7 +93,14 @@ class SQLValidator:
         if allowed_tables:
             from_match = re.findall(r'\bFROM\s+"?(\w+)"?', normalized, re.IGNORECASE)
             join_match = re.findall(r'\bJOIN\s+"?(\w+)"?', normalized, re.IGNORECASE)
-            referenced = set(from_match + join_match)
+            comma_match = re.findall(r'\bFROM\s+(.+?)(?:\bWHERE\b|\bGROUP\b|\bORDER\b|\bLIMIT\b|\bHAVING\b|$)', normalized, re.IGNORECASE)
+            for clause in comma_match:
+                for part in clause.split(","):
+                    tbl = part.strip().split()[0].strip('"') if part.strip() else ""
+                    if tbl and re.match(r'^\w+$', tbl):
+                        from_match.append(tbl)
+            cte_aliases = set(re.findall(r'\b(\w+)\s+AS\s*\(', normalized, re.IGNORECASE))
+            referenced = set(from_match + join_match) - cte_aliases
             disallowed = referenced - allowed_tables
             if disallowed:
                 logger.warning("SQL rejected: disallowed tables %s", disallowed)
@@ -207,7 +215,7 @@ class AnalyticsPipeline:
     _MAX_QUESTION_LEN = 1000
 
     def _empty_result(self, question: str, request_id: str | None, start: float, reason: str) -> PipelineOutput:
-        _zero_llm = {"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "model": "none"}
+        _zero_llm = {"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "model": self.llm.model}
         elapsed = (time.perf_counter() - start) * 1000
         logger.info("Empty result: reason=%s", reason)
         return PipelineOutput(
@@ -247,6 +255,8 @@ class AnalyticsPipeline:
 
     @observe()
     def run(self, question: str, request_id: str | None = None) -> PipelineOutput:
+        if request_id is None:
+            request_id = uuid.uuid4().hex[:12]
         if langfuse_context:
             langfuse_context.update_current_trace(
                 name="pipeline-run",
@@ -300,11 +310,14 @@ class AnalyticsPipeline:
             answer_text = answer_output.answer.strip()
             if len(answer_text) < 5:
                 logger.warning("Answer quality: suspiciously short answer for %d data rows", len(rows))
-            result_numbers = set()
+            result_numbers: list[str] = []
             for row in rows[:20]:
                 for val in row.values():
-                    if isinstance(val, (int, float)):
-                        result_numbers.add(str(val))
+                    if isinstance(val, int):
+                        result_numbers.append(str(val))
+                    elif isinstance(val, float):
+                        result_numbers.append(f"{val:.2f}")
+                        result_numbers.append(str(int(val)) if val == int(val) else f"{val:.0f}")
             if result_numbers:
                 found = sum(1 for n in result_numbers if n in answer_text)
                 if found == 0:
