@@ -96,28 +96,6 @@ set OPENROUTER_API_KEY=<your_key>
 
 On Linux/macOS: `export OPENROUTER_API_KEY=<your_key>`
 
-## Langfuse Observability (Optional)
-
-The pipeline supports [Langfuse](https://langfuse.com/) for production-grade tracing, token tracking, and quality scoring — no code changes needed beyond setting env vars.
-
-1. **Create a free account** at [langfuse.com](https://langfuse.com/) (50K observations/month free)
-2. **Create project keys** in Settings → API Keys
-3. **Add to `.env`:**
-
-```bash
-LANGFUSE_SECRET_KEY=sk-lf-...
-LANGFUSE_PUBLIC_KEY=pk-lf-...
-LANGFUSE_HOST=https://us.cloud.langfuse.com
-```
-
-When configured, every `pipeline.run()` call produces a nested trace in the Langfuse dashboard with:
-- Per-stage latency (SQL generation, validation, execution, answer generation)
-- LLM generation details (model, token usage, prompt/response)
-- SQL validation scores (pass/fail + reason)
-- Request metadata (`request_id`, question, status)
-
-When the env vars are absent, tracing is a no-op with zero overhead.
-
 ## Benchmark
 Run:
 
