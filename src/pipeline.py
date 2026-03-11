@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_DB_PATH = BASE_DIR / "data" / "gaming_mental_health.sqlite"
 
-_MAX_ROWS_FOR_ANSWER = 50
+_MAX_ROWS_FOR_ANSWER = 20
 
 
 class SQLValidationError(Exception):
@@ -147,8 +147,9 @@ class ResultValidator:
                 if isinstance(val, (int, float)):
                     if has_count and "count" in col.lower() and val < 0:
                         warnings.append(f"Negative COUNT value in column '{col}': {val}")
-                    if (has_avg or has_sum) and not isinstance(val, (int, float)):
-                        warnings.append(f"Non-numeric value in aggregation column '{col}'")
+                else:
+                    if has_avg or has_sum:
+                        warnings.append(f"Non-numeric value in aggregation column '{col}': {val}")
 
         return warnings
 
@@ -288,9 +289,23 @@ class AnalyticsPipeline:
         # Stage 4: Answer Generation
         answer_output = self.llm.generate_answer(question, sql, rows)
 
-        # Stage 4b: Answer quality check — non-empty answer when data exists
-        if rows and answer_output.answer and len(answer_output.answer.strip()) < 5:
-            logger.warning("Answer quality: suspiciously short answer for %d data rows", len(rows))
+        # Stage 4b: Answer quality checks
+        if rows and answer_output.answer:
+            answer_text = answer_output.answer.strip()
+            if len(answer_text) < 5:
+                logger.warning("Answer quality: suspiciously short answer for %d data rows", len(rows))
+            result_numbers = set()
+            for row in rows[:20]:
+                for val in row.values():
+                    if isinstance(val, (int, float)):
+                        result_numbers.add(str(val))
+            if result_numbers:
+                found = sum(1 for n in result_numbers if n in answer_text)
+                if found == 0:
+                    logger.warning(
+                        "Answer quality: none of %d numeric values from results appear in answer",
+                        len(result_numbers),
+                    )
 
         # Determine status
         status = "success"
