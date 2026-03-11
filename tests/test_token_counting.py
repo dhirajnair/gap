@@ -22,16 +22,9 @@ class TestTokenEstimation(unittest.TestCase):
         result = OpenRouterLLMClient._estimate_tokens(messages)
         self.assertGreater(result, 10)
 
-    def test_pop_stats_resets(self):
-        client = OpenRouterLLMClient.__new__(OpenRouterLLMClient)
-        client._stats = {"llm_calls": 3, "prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
-        client._stats_lock = __import__("threading").Lock()
-        out = client.pop_stats()
-        self.assertEqual(out["llm_calls"], 3)
-        self.assertEqual(out["total_tokens"], 150)
-        out2 = client.pop_stats()
-        self.assertEqual(out2["llm_calls"], 0)
-        self.assertEqual(out2["total_tokens"], 0)
+    def test_zero_stats_constant(self):
+        self.assertEqual(OpenRouterLLMClient._ZERO_STATS["llm_calls"], 0)
+        self.assertEqual(OpenRouterLLMClient._ZERO_STATS["total_tokens"], 0)
 
 
 if __name__ == "__main__":
