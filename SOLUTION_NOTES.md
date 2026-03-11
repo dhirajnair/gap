@@ -1,6 +1,6 @@
 # Solution Notes
 
-We took an **iterative approach**: starting with an initial implementation covering 11 EPICs (see [Addendum: EPIC Plan](#addendum-epic-plan)), then progressing through several audit-driven refinement passes (Iterations 2–6) to align closely with README requirements. Each iteration focused on improving correctness, observability, and efficiency. The following summary consolidates all changes, organized by area.
+We took an **iterative approach**: starting with an initial implementation covering 11 EPICs (see [Addendum: EPIC Plan](#addendum-epic-plan-from-iteration-1)), then progressing through several audit-driven refinement passes (Iterations 2–6) to align closely with README requirements. Each iteration focused on improving correctness, observability, and efficiency. The following summary consolidates all changes, organized by area.
 
 ---
 
