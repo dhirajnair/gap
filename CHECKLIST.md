@@ -20,7 +20,7 @@ Describe how you approached this assignment and what key problems you identified
 ```
 
 **What was your approach?**
-See [Addendum: EPIC Plan](SOLUTION_NOTES.md#addendum-epic-plan) for the full breakdown.
+See [Addendum: EPIC Plan](SOLUTION_NOTES.md#addendum-epic-plan-from-iteration-1) for the full breakdown.
 
 In short, the solution followed **incremental EPICs (1–11)**, each building on the last:
 - Foundation fixes (dotenv, benchmark bug, pinned deps)
@@ -199,3 +199,4 @@ Include your before/after benchmark results here.
 **Completed by:** Dhiraj Nair
 **Date:** 2026-03-10
 **Time spent:** ~5 hours
+
