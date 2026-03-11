@@ -98,7 +98,7 @@
 
 ---
 
-## Iteration 2
+## Iteration 2 (audit-driven fixes)
 
 Changes driven by strict audit against README requirements (see `temp/FEEDBACK.md`).
 
@@ -117,6 +117,31 @@ Changes driven by strict audit against README requirements (see `temp/FEEDBACK.m
 | Removed double retry in `generate_sql()` | `src/llm_client.py` | Outer retry loop (2 attempts) × inner `_chat()` retry (3 attempts) = up to 6 API calls. Removed outer loop; `_chat()` retries handle transient failures. |
 | Aligned fetch limit | `src/pipeline.py` | `fetchmany(100)` → `fetchmany(50)` — was fetching 100 rows but only using 20 for answer generation. |
 | Extracted `UNANSWERABLE_MSG` constant | `src/types.py` | Same string was hardcoded in 3 places — now a single constant. |
-| Safer PRAGMA in `_load_schema` | `src/pipeline.py` | Uses parameterized `PRAGMA table_info(?)` with fallback to f-string for compatibility. |
+| Safer PRAGMA in `_load_schema` | `src/pipeline.py` | Uses f-string with `""` escaping for `PRAGMA table_info()` (SQLite PRAGMAs do not support parameterized queries). |
 | Added tests | `tests/test_cache_and_retry.py`, `tests/test_result_validation.py` | LRU cache (5 tests), retry behaviour (2 tests), cache integration (1 test), result validation (6 tests). |
 | Updated CHECKLIST.md | `CHECKLIST.md` | Fixed inaccurate claims (logging, sanitize_rows, test count). |
+
+---
+
+## Iteration 3 (audit-driven fixes)
+
+Changes driven by strict audit against README requirements (see `temp/ITERATION3.md`).
+
+### What Changed
+
+| Change | Files | Why |
+|--------|-------|-----|
+| Configured Python logging | `src/__init__.py` | `logging.getLogger(__name__)` was used but no handler was configured — INFO/DEBUG logs silently dropped. Added `logging.basicConfig(level=logging.INFO)`. |
+| Fixed `ResultValidator` dead logic branch | `src/pipeline.py` | Non-numeric aggregation check was nested inside `isinstance(val, (int, float))` guard — always False. Moved to `else` branch so it fires on non-numeric values in AVG/SUM columns. |
+| Improved answer quality check | `src/pipeline.py` | Previous check only warned on answers < 5 chars. Now also verifies numeric values from SQL results appear in the answer (hallucination detection). |
+| Aligned fetch/answer row limit | `src/pipeline.py` | `_MAX_ROWS_FOR_ANSWER` was 50 but `generate_answer()` only used `rows[:20]`. Aligned both to 20 — no wasted row fetching. |
+| Fixed SOLUTION_NOTES inaccuracy | `SOLUTION_NOTES.md` | Iteration 2 claimed "parameterized PRAGMA" — code only uses f-string with `""` escaping. Corrected. |
+| Removed stale `p._cache = {}` | `tests/test_conversation.py` | Dead code — `_cache` was removed from `AnalyticsPipeline` in Iteration 2. |
+| Updated CHECKLIST.md | `CHECKLIST.md` | Updated logging, answer quality, and efficiency descriptions to reflect actual implementation. |
+
+### Not Changed (by design)
+
+| Item | Reason |
+|------|--------|
+| `LANGFUSE_BASE_URL` env var | Works correctly with the Langfuse SDK — no mismatch. |
+| `max_tokens=4096` | Required for reasoning models that fill available context; model stops at EOS regardless. |

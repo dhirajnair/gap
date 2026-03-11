@@ -38,7 +38,7 @@ Incremental EPICs (1–11), each building on the last:
 ## Observability
 
 - [x] **Logging**
-  - Description: Python `logging` module used throughout `src/pipeline.py` and `src/llm_client.py`. Logs stage entry/exit, LLM call attempts, cache hits, validation rejections, errors, and per-request summaries (status, latency, tokens). Langfuse captures structured traces as a parallel observability layer.
+  - Description: Python `logging` module used throughout `src/pipeline.py` and `src/llm_client.py`. Logging configured via `logging.basicConfig(level=logging.INFO)` in `src/__init__.py`. Logs stage entry/exit, LLM call attempts, cache hits, validation rejections, errors, and per-request summaries (status, latency, tokens). Langfuse captures structured traces as a parallel observability layer.
 
 - [x] **Metrics**
   - Description: Per-request metrics tracked in `PipelineOutput.timings` (sql_generation_ms, sql_validation_ms, sql_execution_ms, answer_generation_ms, total_ms) and `total_llm_stats` (llm_calls, prompt_tokens, completion_tokens, total_tokens). Langfuse dashboard aggregates these across runs.
@@ -54,10 +54,10 @@ Incremental EPICs (1–11), each building on the last:
   - Description: Multi-layer validation in `SQLValidator`: (1) SELECT/WITH-only gate, (2) DML/DDL keyword blocklist, (3) dangerous pattern detection (PRAGMA, system tables, comments), (4) multi-statement rejection, (5) table allowlist check, (6) syntax validation via `EXPLAIN`. Each rejection returns a specific error message.
 
 - [x] **Answer quality**
-  - Description: Structured JSON output (`{"sql": "..."}`) for reliable SQL extraction. System prompt constrains the LLM to use only provided data. Answer generation receives truncated rows (max 20) with None→"N/A" sanitization via `_sanitize_rows()`. Answer quality check warns on suspiciously short answers when data is available. Unanswerable questions return a clear explanation rather than hallucinated SQL.
+  - Description: Structured JSON output (`{"sql": "..."}`) for reliable SQL extraction. System prompt constrains the LLM to use only provided data. Answer generation receives truncated rows (max 20) with None→"N/A" sanitization via `_sanitize_rows()`. Answer quality checks: (1) warns on suspiciously short answers when data is available, (2) verifies numeric values from SQL results appear in the generated answer (hallucination detection). Unanswerable questions return a clear explanation rather than hallucinated SQL.
 
 - [x] **Result validation**
-  - Description: `ResultValidator` performs analytics sanity checks on SQL execution results: column consistency across rows and negative-count detection for COUNT aggregations. Warnings are logged but do not block the pipeline.
+  - Description: `ResultValidator` performs analytics sanity checks on SQL execution results: column consistency across rows, negative-count detection for COUNT aggregations, and non-numeric value detection in AVG/SUM aggregation columns. Warnings are logged but do not block the pipeline.
 
 - [x] **Result consistency**
   - Description: Schema introspection cached at init (not per-request). Response caching (bounded LRU cache, max 128 entries) for identical prompts. Deterministic temperature=0.0 for SQL generation. All stage outputs conform to typed dataclasses in `src/types.py`.
@@ -89,7 +89,7 @@ Incremental EPICs (1–11), each building on the last:
   - Description: Compact schema representation (`table(col1,col2,...)` instead of verbose text). Terse system prompts. Result truncation to 20 rows before answer generation. JSON-only output format eliminates verbose explanations.
 
 - [x] **Efficient LLM requests**
-  - Description: Bounded LRU response cache (128 entries, hash-keyed) eliminates duplicate LLM calls. Schema cached at init. max_tokens=4096 accommodates reasoning models (model stops at EOS). Thread-safe stats with `threading.Lock`.
+  - Description: Bounded LRU response cache (128 entries, hash-keyed) eliminates duplicate LLM calls. Schema cached at init. Fetch limit aligned to 20 rows (matches answer generation usage — no wasted fetching). max_tokens=4096 accommodates reasoning models (model stops at EOS). Thread-safe stats with `threading.Lock`.
 
 ---
 

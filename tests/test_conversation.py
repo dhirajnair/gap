@@ -106,7 +106,6 @@ class TestMultiTurnPipeline(unittest.TestCase):
         )
         p.schema = {"tables": {}}
         p._allowed_tables = set()
-        p._cache = {}
         return p
 
     def _mock_sql_return(self, mock_llm, sql):
