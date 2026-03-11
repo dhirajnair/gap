@@ -22,7 +22,7 @@
 - 6-layer validation: SELECT/WITH-only, DML blocklist, dangerous patterns (PRAGMA, system tables, comments), multi-statement rejection, table allowlist, `EXPLAIN` syntax check.
 - Each rejection returns a specific error message.
 
-### EPIC 5 + 11 — Observability (Langfuse)
+### EPIC 5 — Observability (Langfuse)
 - Replaced planned hand-rolled tracing with Langfuse `@observe()` decorators.
 - `_chat()` → `@observe(as_type="generation")` auto-captures model, tokens, latency.
 - `run()` → trace metadata (request_id, question) + SQL validation scores.
@@ -49,7 +49,7 @@
 - `test_edge_cases.py`: 4 tests (empty, whitespace, long input, output contract).
 - `conftest.py`: sys.path fix for test imports.
 
-### EPIC 10 — Multi-Turn Conversation
+### EPIC 9 — Multi-Turn Conversation
 - `ConversationManager`: stores turns, heuristic follow-up detection, context enrichment.
 - `AnalyticsPipeline.run_conversation()`: enrich → run → record.
 - `test_conversation.py`: 15 tests including 4-turn chain.
