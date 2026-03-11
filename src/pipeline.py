@@ -16,6 +16,7 @@ from src.types import (
     SQLExecutionOutput,
     PipelineOutput,
     UNANSWERABLE_MSG,
+    MAX_ROWS_FOR_ANSWER,
 )
 
 try:
@@ -34,7 +35,7 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_DB_PATH = BASE_DIR / "data" / "gaming_mental_health.sqlite"
 
-_MAX_ROWS_FOR_ANSWER = 20
+_MAX_ROWS_FOR_ANSWER = MAX_ROWS_FOR_ANSWER
 
 
 class SQLValidationError(Exception):
@@ -323,7 +324,7 @@ class AnalyticsPipeline:
             if len(answer_text) < 5:
                 logger.warning("Answer quality: suspiciously short answer for %d data rows", len(rows))
             result_numbers: list[str] = []
-            for row in rows[:20]:
+            for row in rows[:_MAX_ROWS_FOR_ANSWER]:
                 for val in row.values():
                     if isinstance(val, int):
                         result_numbers.append(str(val))

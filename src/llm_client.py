@@ -9,7 +9,7 @@ import time
 from collections import OrderedDict
 from typing import Any
 
-from src.types import SQLGenerationOutput, AnswerGenerationOutput, UNANSWERABLE_MSG
+from src.types import SQLGenerationOutput, AnswerGenerationOutput, UNANSWERABLE_MSG, MAX_ROWS_FOR_ANSWER
 
 try:
     from langfuse.decorators import observe, langfuse_context
@@ -262,7 +262,7 @@ class OpenRouterLLMClient:
         sanitized_q = _CONTROL_CHARS_RE.sub('', question)
         user_prompt = (
             f"Q: {sanitized_q}\nSQL: {sql}\n"
-            f"Data: {json.dumps(rows[:20], ensure_ascii=True)}\n"
+            f"Data: {json.dumps(rows[:MAX_ROWS_FOR_ANSWER], ensure_ascii=True)}\n"
             "Answer:"
         )
 

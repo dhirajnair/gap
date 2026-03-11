@@ -10,6 +10,8 @@ UNANSWERABLE_MSG = (
     "Please rephrase using known survey fields."
 )
 
+MAX_ROWS_FOR_ANSWER = 20
+
 
 @dataclass
 class PipelineInput:
