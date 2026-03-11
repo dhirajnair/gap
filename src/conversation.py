@@ -82,6 +82,8 @@ class ConversationManager:
             parts.append(f"Q{i}: {turn.question}")
             if turn.sql:
                 parts.append(f"SQL{i}: {turn.sql}")
+            if turn.answer:
+                parts.append(f"A{i}: {turn.answer}")
         parts.append(f"Follow-up question: {question}")
         parts.append("Rewrite and answer the follow-up as a standalone query.")
         return "\n".join(parts)
