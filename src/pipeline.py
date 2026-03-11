@@ -94,12 +94,14 @@ class SQLValidator:
         if allowed_tables:
             from_match = re.findall(r'\bFROM\s+"?(\w+)"?', normalized, re.IGNORECASE)
             join_match = re.findall(r'\bJOIN\s+"?(\w+)"?', normalized, re.IGNORECASE)
-            comma_match = re.findall(r'\bFROM\s+(.+?)(?:\bWHERE\b|\bGROUP\b|\bORDER\b|\bLIMIT\b|\bHAVING\b|$)', normalized, re.IGNORECASE)
-            for clause in comma_match:
-                for part in clause.split(","):
-                    tbl = part.strip().split()[0].strip('"') if part.strip() else ""
-                    if tbl and re.match(r'^\w+$', tbl):
-                        from_match.append(tbl)
+            has_subquery = '(' in normalized
+            if not has_subquery:
+                comma_match = re.findall(r'\bFROM\s+(.+?)(?:\bWHERE\b|\bGROUP\b|\bORDER\b|\bLIMIT\b|\bHAVING\b|$)', normalized, re.IGNORECASE)
+                for clause in comma_match:
+                    for part in clause.split(","):
+                        tbl = part.strip().split()[0].strip('"') if part.strip() else ""
+                        if tbl and re.match(r'^\w+$', tbl):
+                            from_match.append(tbl)
             cte_aliases = set(re.findall(r'\b(\w+)\s+AS\s*\(', normalized, re.IGNORECASE))
             referenced = set(from_match + join_match) - cte_aliases
             disallowed = referenced - allowed_tables
