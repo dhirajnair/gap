@@ -321,7 +321,7 @@ class AnalyticsPipeline:
         return schema
 
     @observe()
-    def run(self, question: str, request_id: str | None = None, *, _max_input_len: int = 0) -> PipelineOutput:
+    def run(self, question: str, request_id: str | None = None, *, _max_input_len: int = 0, _answer_question: str | None = None) -> PipelineOutput:
         if request_id is None:
             request_id = uuid.uuid4().hex[:12]
         if langfuse_context:
@@ -384,8 +384,9 @@ class AnalyticsPipeline:
         if result_warnings:
             logger.warning("Result validation warnings: %s", result_warnings)
 
-        # Stage 4: Answer Generation
-        answer_output = self.llm.generate_answer(question, sql, rows)
+        # Stage 4: Answer Generation (use _answer_question for follow-ups to avoid "rewrite as query" confusing the answer LLM)
+        answer_q = _answer_question if _answer_question is not None else question
+        answer_output = self.llm.generate_answer(answer_q, sql, rows)
 
         # Stage 4b: Answer quality checks
         if rows and answer_output.answer:
@@ -469,6 +470,11 @@ class AnalyticsPipeline:
         if len(raw) > self._MAX_QUESTION_LEN:
             raw = raw[: self._MAX_QUESTION_LEN]
         enriched = conversation.build_context_prompt(raw)
-        result: PipelineOutput = self.run(enriched, request_id=request_id, _max_input_len=self._MAX_ENRICHED_LEN)
+        result: PipelineOutput = self.run(
+            enriched,
+            request_id=request_id,
+            _max_input_len=self._MAX_ENRICHED_LEN,
+            _answer_question=raw,
+        )
         conversation.add_turn(raw, result.sql, result.answer)
         return result
