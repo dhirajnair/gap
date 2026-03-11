@@ -156,7 +156,6 @@ Changes driven by strict audit against README requirements (see `temp/ITERATION4
 
 | Change | Files | Why |
 |--------|-------|-----|
-| Stripped real API keys from `.env` | `.env` | **CRITICAL** — plaintext secrets on disk would leak if project is submitted as archive. Replaced with placeholders. |
 | Pre-compiled regex in `_extract_sql()` | `src/llm_client.py` | `import re` was inside the method (re-imported every call) and regex was recompiled per invocation. Moved `re` to top-level import; regex compiled as module-level `_MD_SQL_RE` constant. |
 | Cache key includes temperature + max_tokens | `src/llm_client.py` | Cache was keyed only on messages — same messages with different temperature would return stale result. Now includes `temperature` and `max_tokens` in the hash. |
 | Moved `load_dotenv()` to explicit entry points | `src/__init__.py`, `scripts/benchmark.py`, `tests/conftest.py` | `load_dotenv()` ran as module-level side effect on any `import src`, depending on CWD and causing file I/O on import. Now called explicitly via `init_env()` in benchmark and test setup. |
@@ -171,3 +170,22 @@ Changes driven by strict audit against README requirements (see `temp/ITERATION4
 | `max_tokens` parameter in `_chat()` | Both callers pass 4096 — effectively fixed, parameter is used (not hardcoded). Keeping it for future flexibility. |
 | SQLite connection reuse | Single-user use case; connection pooling adds complexity with no measurable benefit. |
 | `conftest.py` sys.path hack | `pyproject.toml` editable install is cleaner but changes project structure. Out of scope. |
+
+---
+
+## Iteration 6 (audit-driven code quality fixes)
+
+Changes driven by strict audit (see `temp/ITERATION5.md`), addressing code quality issues C1, C3–C8.
+
+### What Changed
+
+| Change | Files | Why |
+|--------|-------|-----|
+| `_compact_schema()` includes column types | `src/llm_client.py` | Schema sent `table(col1,col2)` — LLM had no way to know if a column is INTEGER vs TEXT, risking incorrect SQL casts/comparisons. Now sends `table(col1:INTEGER,col2:TEXT,...)`. |
+| Removed ≤4-word follow-up heuristic | `src/conversation.py` | `is_followup()` treated any short question (≤4 words) as a follow-up — too aggressive. Standalone queries like "Count all rows" were wrongly enriched with irrelevant history. Pronoun, conjunction, and pattern checks remain. |
+| Tolerance-based numeric answer check | `src/pipeline.py` | `str(val)` exact matching was brittle with floats (`str(0.1+0.2)` → `"0.30000000000000004"`). Now rounds floats to 2 d.p. and also checks the integer form for whole-number floats. |
+| Improved SQLValidator table extraction | `src/pipeline.py` | Regex missed comma-joins (`FROM t1, t2`) and let CTE aliases trigger false rejections. Now parses comma-separated FROM clauses and excludes CTE aliases from the allowlist check. |
+| `_sanitize_rows()` preserves None as JSON null | `src/llm_client.py` | Replacing None with `"N/A"` string misled the LLM into treating nulls as real values. Now passes rows through unchanged; `json.dumps` renders None as `null`. |
+| Auto-generated `request_id` | `src/pipeline.py` | `run()` now generates a 12-char hex UUID when caller doesn't provide one, ensuring every trace/log has a correlation ID. |
+| `_empty_result()` uses actual model name | `src/pipeline.py` | Early exits reported `model="none"` which confused downstream analytics. Now uses `self.llm.model`. |
+| Removed false `.env` claim from Iteration 4 | `SOLUTION_NOTES.md` | Iteration 4 claimed `.env` was stripped — it was not (`.env` is gitignored and was never committed). Removed the inaccurate entry. |
