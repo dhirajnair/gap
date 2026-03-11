@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
 import time
@@ -13,6 +14,7 @@ from src.types import (
     SQLValidationOutput,
     SQLExecutionOutput,
     PipelineOutput,
+    UNANSWERABLE_MSG,
 )
 
 try:
@@ -26,9 +28,12 @@ except ImportError:
         return decorator
     langfuse_context = None
 
+logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_DB_PATH = BASE_DIR / "data" / "gaming_mental_health.sqlite"
+
+_MAX_ROWS_FOR_ANSWER = 50
 
 
 class SQLValidationError(Exception):
@@ -51,83 +56,101 @@ class SQLValidator:
 
         if sql is None:
             return SQLValidationOutput(
-                is_valid=False,
-                validated_sql=None,
-                error="No SQL provided",
-                timing_ms=(time.perf_counter() - start) * 1000,
+                is_valid=False, validated_sql=None,
+                error="No SQL provided", timing_ms=(time.perf_counter() - start) * 1000,
             )
 
         normalized = sql.strip().rstrip(";")
 
-        # Block non-SELECT statements (allow WITH ... SELECT for CTEs)
         if not normalized.upper().startswith(("SELECT", "WITH")):
+            logger.warning("SQL rejected: not a SELECT — %.60s", normalized)
             return SQLValidationOutput(
-                is_valid=False,
-                validated_sql=None,
-                error="Only SELECT statements are allowed",
-                timing_ms=(time.perf_counter() - start) * 1000,
+                is_valid=False, validated_sql=None,
+                error="Only SELECT statements are allowed", timing_ms=(time.perf_counter() - start) * 1000,
             )
 
-        # Block DML/DDL keywords
         if cls._BLOCKED_KEYWORDS.search(normalized):
+            logger.warning("SQL rejected: blocked keyword — %.60s", normalized)
             return SQLValidationOutput(
-                is_valid=False,
-                validated_sql=None,
-                error="Statement contains blocked keyword",
-                timing_ms=(time.perf_counter() - start) * 1000,
+                is_valid=False, validated_sql=None,
+                error="Statement contains blocked keyword", timing_ms=(time.perf_counter() - start) * 1000,
             )
 
-        # Block dangerous patterns (PRAGMA, system tables, comments)
         if cls._DANGEROUS_PATTERNS.search(normalized):
+            logger.warning("SQL rejected: dangerous pattern — %.60s", normalized)
             return SQLValidationOutput(
-                is_valid=False,
-                validated_sql=None,
-                error="Statement contains dangerous pattern",
-                timing_ms=(time.perf_counter() - start) * 1000,
+                is_valid=False, validated_sql=None,
+                error="Statement contains dangerous pattern", timing_ms=(time.perf_counter() - start) * 1000,
             )
 
-        # Block multi-statement (semicolons in the middle)
         if ";" in normalized:
             return SQLValidationOutput(
-                is_valid=False,
-                validated_sql=None,
-                error="Multiple statements not allowed",
-                timing_ms=(time.perf_counter() - start) * 1000,
+                is_valid=False, validated_sql=None,
+                error="Multiple statements not allowed", timing_ms=(time.perf_counter() - start) * 1000,
             )
 
-        # Table allowlist check
         if allowed_tables:
             from_match = re.findall(r'\bFROM\s+"?(\w+)"?', normalized, re.IGNORECASE)
             join_match = re.findall(r'\bJOIN\s+"?(\w+)"?', normalized, re.IGNORECASE)
             referenced = set(from_match + join_match)
             disallowed = referenced - allowed_tables
             if disallowed:
+                logger.warning("SQL rejected: disallowed tables %s", disallowed)
                 return SQLValidationOutput(
-                    is_valid=False,
-                    validated_sql=None,
+                    is_valid=False, validated_sql=None,
                     error=f"References disallowed table(s): {', '.join(sorted(disallowed))}",
                     timing_ms=(time.perf_counter() - start) * 1000,
                 )
 
-        # Syntax validation via EXPLAIN
         if db_path and db_path.exists():
             try:
                 with sqlite3.connect(db_path) as conn:
-                    conn.execute(f"EXPLAIN {normalized}")
+                    conn.execute("EXPLAIN " + normalized)
             except sqlite3.Error as e:
+                logger.warning("SQL syntax error: %s", e)
                 return SQLValidationOutput(
-                    is_valid=False,
-                    validated_sql=None,
-                    error=f"SQL syntax error: {e}",
-                    timing_ms=(time.perf_counter() - start) * 1000,
+                    is_valid=False, validated_sql=None,
+                    error=f"SQL syntax error: {e}", timing_ms=(time.perf_counter() - start) * 1000,
                 )
 
+        logger.debug("SQL validated OK: %.80s", normalized)
         return SQLValidationOutput(
-            is_valid=True,
-            validated_sql=normalized,
-            error=None,
+            is_valid=True, validated_sql=normalized, error=None,
             timing_ms=(time.perf_counter() - start) * 1000,
         )
+
+
+class ResultValidator:
+    """Sanity-checks on SQL execution results for analytics pipelines."""
+
+    @staticmethod
+    def validate(rows: list[dict], sql: str | None) -> list[str]:
+        warnings: list[str] = []
+        if not rows or not sql:
+            return warnings
+
+        keys_first = set(rows[0].keys())
+        for i, row in enumerate(rows[1:], start=1):
+            if set(row.keys()) != keys_first:
+                warnings.append(f"Row {i} has inconsistent columns")
+                break
+
+        sql_upper = (sql or "").upper()
+        has_count = "COUNT(" in sql_upper
+        has_avg = "AVG(" in sql_upper
+        has_sum = "SUM(" in sql_upper
+
+        for row in rows:
+            for col, val in row.items():
+                if val is None:
+                    continue
+                if isinstance(val, (int, float)):
+                    if has_count and "count" in col.lower() and val < 0:
+                        warnings.append(f"Negative COUNT value in column '{col}': {val}")
+                    if (has_avg or has_sum) and not isinstance(val, (int, float)):
+                        warnings.append(f"Non-numeric value in aggregation column '{col}'")
+
+        return warnings
 
 
 class SQLiteExecutor:
@@ -139,15 +162,13 @@ class SQLiteExecutor:
     def run(self, sql: str | None) -> SQLExecutionOutput:
         start = time.perf_counter()
         error = None
-        rows = []
+        rows: list[dict] = []
         row_count = 0
 
         if sql is None:
             return SQLExecutionOutput(
-                rows=[],
-                row_count=0,
-                timing_ms=(time.perf_counter() - start) * 1000,
-                error=None,
+                rows=[], row_count=0,
+                timing_ms=(time.perf_counter() - start) * 1000, error=None,
             )
 
         try:
@@ -156,19 +177,17 @@ class SQLiteExecutor:
                 conn.row_factory = sqlite3.Row
                 cur = conn.cursor()
                 cur.execute(sql)
-                rows = [dict(r) for r in cur.fetchmany(100)]
+                rows = [dict(r) for r in cur.fetchmany(_MAX_ROWS_FOR_ANSWER)]
                 row_count = len(rows)
         except Exception as exc:
             error = str(exc)
-            rows = []
-            row_count = 0
+            logger.error("SQL execution error: %s", error)
 
         return SQLExecutionOutput(
-            rows=rows,
-            row_count=row_count,
-            timing_ms=(time.perf_counter() - start) * 1000,
-            error=error,
+            rows=rows, row_count=row_count,
+            timing_ms=(time.perf_counter() - start) * 1000, error=error,
         )
+
 
 class AnalyticsPipeline:
     def __init__(self, db_path: str | Path = DEFAULT_DB_PATH, llm_client: OpenRouterLLMClient | None = None) -> None:
@@ -177,23 +196,20 @@ class AnalyticsPipeline:
         self.executor = SQLiteExecutor(self.db_path)
         self._allowed_tables = self._get_table_names()
         self.schema = self._load_schema()
-        self._cache: dict[str, str] = {}
 
     _MAX_QUESTION_LEN = 1000
 
     def _empty_result(self, question: str, request_id: str | None, start: float, reason: str) -> PipelineOutput:
         _zero_llm = {"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "model": "none"}
         elapsed = (time.perf_counter() - start) * 1000
+        logger.info("Empty result: reason=%s", reason)
         return PipelineOutput(
             status="unanswerable", question=question, request_id=request_id,
             sql_generation=SQLGenerationOutput(sql=None, timing_ms=0.0, llm_stats=_zero_llm, error=reason),
             sql_validation=SQLValidationOutput(is_valid=False, validated_sql=None, error=reason),
             sql_execution=SQLExecutionOutput(rows=[], row_count=0, timing_ms=0.0),
-            answer_generation=AnswerGenerationOutput(
-                answer=f"I cannot answer this with the available table and schema. Please rephrase using known survey fields.",
-                timing_ms=0.0, llm_stats=_zero_llm,
-            ),
-            sql=None, rows=[], answer="I cannot answer this with the available table and schema. Please rephrase using known survey fields.",
+            answer_generation=AnswerGenerationOutput(answer=UNANSWERABLE_MSG, timing_ms=0.0, llm_stats=_zero_llm),
+            sql=None, rows=[], answer=UNANSWERABLE_MSG,
             timings={"sql_generation_ms": 0, "sql_validation_ms": 0, "sql_execution_ms": 0, "answer_generation_ms": 0, "total_ms": elapsed},
             total_llm_stats=_zero_llm,
         )
@@ -214,9 +230,12 @@ class AnalyticsPipeline:
         with sqlite3.connect(self.db_path) as conn:
             cur = conn.cursor()
             cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-            for (table_name,) in cur.fetchall():
-                cur.execute(f'PRAGMA table_info("{table_name}")')
+            tables = cur.fetchall()
+            for (table_name,) in tables:
+                safe_name = table_name.replace('"', '""')
+                cur.execute(f'PRAGMA table_info("{safe_name}")')
                 schema["tables"][table_name] = {row[1]: row[2] for row in cur.fetchall()}
+        logger.info("Schema loaded: %d table(s)", len(schema["tables"]))
         return schema
 
     @observe()
@@ -229,6 +248,7 @@ class AnalyticsPipeline:
             )
 
         start = time.perf_counter()
+        logger.info("Pipeline run start: question=%.80s request_id=%s", question, request_id)
 
         question = (question or "").strip()
         if not question:
@@ -256,13 +276,21 @@ class AnalyticsPipeline:
         execution_output = self.executor.run(sql)
         rows = execution_output.rows
 
-        # On execution error, clear sql/rows so answer gen handles gracefully
         if execution_output.error:
             sql = None
             rows = []
 
+        # Stage 3b: Result Validation (analytics sanity checks)
+        result_warnings = ResultValidator.validate(rows, sql)
+        if result_warnings:
+            logger.warning("Result validation warnings: %s", result_warnings)
+
         # Stage 4: Answer Generation
         answer_output = self.llm.generate_answer(question, sql, rows)
+
+        # Stage 4b: Answer quality check — non-empty answer when data exists
+        if rows and answer_output.answer and len(answer_output.answer.strip()) < 5:
+            logger.warning("Answer quality: suspiciously short answer for %d data rows", len(rows))
 
         # Determine status
         status = "success"
@@ -273,7 +301,6 @@ class AnalyticsPipeline:
         elif execution_output.error:
             status = "error"
 
-        # Build timings aggregate
         timings = {
             "sql_generation_ms": sql_gen_output.timing_ms,
             "sql_validation_ms": validation_output.timing_ms,
@@ -282,7 +309,6 @@ class AnalyticsPipeline:
             "total_ms": (time.perf_counter() - start) * 1000,
         }
 
-        # Build total LLM stats
         total_llm_stats = {
             "llm_calls": sql_gen_output.llm_stats.get("llm_calls", 0) + answer_output.llm_stats.get("llm_calls", 0),
             "prompt_tokens": sql_gen_output.llm_stats.get("prompt_tokens", 0) + answer_output.llm_stats.get("prompt_tokens", 0),
@@ -290,6 +316,11 @@ class AnalyticsPipeline:
             "total_tokens": sql_gen_output.llm_stats.get("total_tokens", 0) + answer_output.llm_stats.get("total_tokens", 0),
             "model": sql_gen_output.llm_stats.get("model", "unknown"),
         }
+
+        logger.info(
+            "Pipeline run complete: status=%s total_ms=%.1f tokens=%d",
+            status, timings["total_ms"], total_llm_stats["total_tokens"],
+        )
 
         if langfuse_context:
             langfuse_context.update_current_trace(

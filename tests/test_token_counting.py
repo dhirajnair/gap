@@ -25,6 +25,7 @@ class TestTokenEstimation(unittest.TestCase):
     def test_pop_stats_resets(self):
         client = OpenRouterLLMClient.__new__(OpenRouterLLMClient)
         client._stats = {"llm_calls": 3, "prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
+        client._stats_lock = __import__("threading").Lock()
         out = client.pop_stats()
         self.assertEqual(out["llm_calls"], 3)
         self.assertEqual(out["total_tokens"], 150)

@@ -5,6 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+UNANSWERABLE_MSG = (
+    "I cannot answer this with the available table and schema. "
+    "Please rephrase using known survey fields."
+)
+
 
 @dataclass
 class PipelineInput:

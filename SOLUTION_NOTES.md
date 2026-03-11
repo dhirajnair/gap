@@ -75,9 +75,48 @@
 | Table-level validation only | Column-level allowlist would catch more errors but adds complexity. |
 | No streaming | Simpler implementation; streaming would reduce perceived latency. |
 
+## Measured Impact
+
+**Baseline (before any changes):**
+- Average latency: 9030 ms
+- p50 latency: 9162 ms
+- p95 latency: 12183 ms
+- Success rate: 0% (no schema context → invalid SQL)
+
+**After Iteration 1:**
+- Average latency: 7810 ms
+- p50 latency: 351 ms (cache hits on repeated runs)
+- p95 latency: 28147 ms (cold LLM calls with reasoning model)
+- Success rate: 83.33%
+- Average tokens per request: ~300 (compressed prompts + caching)
+
 ## Next Steps
-1. Run `python3 scripts/benchmark.py --runs 3` and fill in benchmark numbers in CHECKLIST.md.
-2. Column-level SQL validation.
-3. LLM-based follow-up detection for edge cases.
-4. Disk/Redis response cache for multi-process deployments.
-5. Streaming responses for lower perceived latency.
+1. Column-level SQL validation.
+2. LLM-based follow-up detection for edge cases.
+3. Disk/Redis response cache for multi-process deployments.
+4. Streaming responses for lower perceived latency.
+
+---
+
+## Iteration 2
+
+Changes driven by strict audit against README requirements (see `temp/FEEDBACK.md`).
+
+### What Changed
+
+| Change | Files | Why |
+|--------|-------|-----|
+| Added Python `logging` throughout | `src/pipeline.py`, `src/llm_client.py` | README Task 4 requires "tracing, metrics, **and logging**" — zero log statements existed. |
+| Added `ResultValidator` | `src/pipeline.py` | README Task 5 requires "result validation" — sanity checks on query results (column consistency, negative counts). |
+| Added answer quality check | `src/pipeline.py` | README Task 5 requires "answer quality checks" — warns on suspiciously short answers when data exists. |
+| Wired `_sanitize_rows()` | `src/llm_client.py` | Was dead code (defined but never called). Now called in `generate_answer()` before `json.dumps()`. |
+| Removed unused `self._cache` in pipeline | `src/pipeline.py` | Dead code — caching actually lives in `OpenRouterLLMClient`. |
+| Bounded LRU cache | `src/llm_client.py` | Unbounded `dict` → `_LRUCache(128)` to prevent OOM in long-running processes. |
+| Hash-based cache key | `src/llm_client.py` | `sha256(json.dumps(...))` instead of storing full serialized messages as keys. |
+| Thread-safe `pop_stats()` | `src/llm_client.py` | Added `threading.Lock` around stats read+reset to prevent data loss in concurrent use. |
+| Removed double retry in `generate_sql()` | `src/llm_client.py` | Outer retry loop (2 attempts) × inner `_chat()` retry (3 attempts) = up to 6 API calls. Removed outer loop; `_chat()` retries handle transient failures. |
+| Aligned fetch limit | `src/pipeline.py` | `fetchmany(100)` → `fetchmany(50)` — was fetching 100 rows but only using 20 for answer generation. |
+| Extracted `UNANSWERABLE_MSG` constant | `src/types.py` | Same string was hardcoded in 3 places — now a single constant. |
+| Safer PRAGMA in `_load_schema` | `src/pipeline.py` | Uses parameterized `PRAGMA table_info(?)` with fallback to f-string for compatibility. |
+| Added tests | `tests/test_cache_and_retry.py`, `tests/test_result_validation.py` | LRU cache (5 tests), retry behaviour (2 tests), cache integration (1 test), result validation (6 tests). |
+| Updated CHECKLIST.md | `CHECKLIST.md` | Fixed inaccurate claims (logging, sanitize_rows, test count). |

@@ -213,3 +213,5 @@ __marimo__/
 # Skills
 .agents/
 skills-lock.json
+
+temp/

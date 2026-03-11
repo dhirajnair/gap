@@ -38,7 +38,7 @@ Incremental EPICs (1–11), each building on the last:
 ## Observability
 
 - [x] **Logging**
-  - Description: Langfuse captures structured traces for every pipeline run with full prompt/response payloads, errors, and metadata. Each trace is nested: pipeline → generate_sql → _chat, pipeline → generate_answer → _chat.
+  - Description: Python `logging` module used throughout `src/pipeline.py` and `src/llm_client.py`. Logs stage entry/exit, LLM call attempts, cache hits, validation rejections, errors, and per-request summaries (status, latency, tokens). Langfuse captures structured traces as a parallel observability layer.
 
 - [x] **Metrics**
   - Description: Per-request metrics tracked in `PipelineOutput.timings` (sql_generation_ms, sql_validation_ms, sql_execution_ms, answer_generation_ms, total_ms) and `total_llm_stats` (llm_calls, prompt_tokens, completion_tokens, total_tokens). Langfuse dashboard aggregates these across runs.
@@ -54,10 +54,13 @@ Incremental EPICs (1–11), each building on the last:
   - Description: Multi-layer validation in `SQLValidator`: (1) SELECT/WITH-only gate, (2) DML/DDL keyword blocklist, (3) dangerous pattern detection (PRAGMA, system tables, comments), (4) multi-statement rejection, (5) table allowlist check, (6) syntax validation via `EXPLAIN`. Each rejection returns a specific error message.
 
 - [x] **Answer quality**
-  - Description: Structured JSON output (`{"sql": "..."}`) for reliable SQL extraction. System prompt constrains the LLM to use only provided data. Answer generation receives truncated rows (max 20) with None→"N/A" sanitization. Unanswerable questions return a clear explanation rather than hallucinated SQL.
+  - Description: Structured JSON output (`{"sql": "..."}`) for reliable SQL extraction. System prompt constrains the LLM to use only provided data. Answer generation receives truncated rows (max 20) with None→"N/A" sanitization via `_sanitize_rows()`. Answer quality check warns on suspiciously short answers when data is available. Unanswerable questions return a clear explanation rather than hallucinated SQL.
+
+- [x] **Result validation**
+  - Description: `ResultValidator` performs analytics sanity checks on SQL execution results: column consistency across rows and negative-count detection for COUNT aggregations. Warnings are logged but do not block the pipeline.
 
 - [x] **Result consistency**
-  - Description: Schema introspection cached at init (not per-request). Response caching (identical prompts return cached LLM output). Deterministic temperature=0.0 for SQL generation. All stage outputs conform to typed dataclasses in `src/types.py`.
+  - Description: Schema introspection cached at init (not per-request). Response caching (bounded LRU cache, max 128 entries) for identical prompts. Deterministic temperature=0.0 for SQL generation. All stage outputs conform to typed dataclasses in `src/types.py`.
 
 - [x] **Error handling**
   - Description: Retries with exponential backoff (2 attempts) for transient LLM failures. SQL execution errors set status="error" and clear rows. Empty/null results handled gracefully. Input sanitization (strip, truncate at 1000 chars, empty→unanswerable). Timeouts on SQL execution (30s).
@@ -86,14 +89,14 @@ Incremental EPICs (1–11), each building on the last:
   - Description: Compact schema representation (`table(col1,col2,...)` instead of verbose text). Terse system prompts. Result truncation to 20 rows before answer generation. JSON-only output format eliminates verbose explanations.
 
 - [x] **Efficient LLM requests**
-  - Description: Response caching eliminates duplicate LLM calls for identical prompts. Schema cached at init. Single-retry on null SQL extraction before giving up. max_tokens=4096 accommodates reasoning models without waste (model stops at EOS).
+  - Description: Bounded LRU response cache (128 entries, hash-keyed) eliminates duplicate LLM calls. Schema cached at init. max_tokens=4096 accommodates reasoning models (model stops at EOS). Thread-safe stats with `threading.Lock`.
 
 ---
 
 ## Testing
 
 - [x] **Unit tests**
-  - Description: `test_validation.py` (14 tests — each validation rule), `test_llm_client.py` (8 tests — SQL extraction from JSON, markdown, raw text), `test_token_counting.py` (4 tests — estimation, accumulation, pop_stats reset).
+  - Description: `test_validation.py` (14 tests — each validation rule), `test_llm_client.py` (8 tests — SQL extraction from JSON, markdown, raw text), `test_token_counting.py` (4 tests — estimation, accumulation, pop_stats reset), `test_cache_and_retry.py` (8 tests — LRU cache, retry, cache integration), `test_result_validation.py` (6 tests — result sanity checks).
 
 - [x] **Integration tests**
   - Description: `test_public.py` (5 tests — answerable prompt, invalid SQL rejection, output contract, timings, unanswerable handling). All pass with live LLM calls.
@@ -143,7 +146,7 @@ pronoun, pattern, and conjunction follow-ups.
 3. Observability: Langfuse tracing with nested spans, token tracking, and quality scores — zero
    code change to enable/disable (env-var toggle).
 4. Efficiency: Compact prompts, response caching, result truncation, schema caching.
-5. Testing: 50+ tests covering validation, extraction, edge cases, and multi-turn conversations.
+5. Testing: 60+ tests covering validation, extraction, caching, retry, result validation, edge cases, and multi-turn conversations.
 6. Typed contracts: All stage outputs are dataclasses — no dict-key guessing.
 ```
 
@@ -160,7 +163,7 @@ pronoun, pattern, and conjunction follow-ups.
 **Known limitations or future work:**
 ```
 - Follow-up detection is heuristic — an LLM-based classifier would improve accuracy.
-- Response cache is in-memory (per-process) — Redis/disk cache for multi-process deployments.
+- Response cache is in-memory LRU (per-process, 128 entries) — Redis/disk cache for multi-process deployments.
 - No column-level validation in SQL (only table-level allowlist).
 - No rate limiting or cost tracking beyond Langfuse token counts.
 - Benchmark numbers are model-dependent; results vary with OpenRouter load.
@@ -172,7 +175,7 @@ pronoun, pattern, and conjunction follow-ups.
 
 Include your before/after benchmark results here.
 
-**Baseline (measured):**
+**Baseline (measured - had to fix the benchmark script to work):**
 - Average latency: `9030 ms`
 - p50 latency: `9162 ms`
 - p95 latency: `12183 ms`
