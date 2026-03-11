@@ -73,13 +73,13 @@ Incremental EPICs (1–11), each building on the last:
   - Description: Clean separation: `src/llm_client.py` (LLM interaction), `src/pipeline.py` (orchestration + validation + execution), `src/conversation.py` (multi-turn state), `src/types.py` (typed contracts). No circular dependencies.
 
 - [x] **Configuration**
-  - Description: All config via environment variables: `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `LANGFUSE_*`. Loaded via `python-dotenv` in `src/__init__.py`. Sensible defaults (model=gpt-5-nano, timeouts=30s, max_retries=2).
+  - Description: All config via environment variables: `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `LANGFUSE_*`. Loaded via `python-dotenv` through explicit `init_env()` calls in entry points (benchmark, conftest). Sensible defaults (model=gpt-5-nano, timeouts=30s, max_retries=2).
 
 - [x] **Error handling**
   - Description: Every stage has try/except with specific error propagation. LLM failures → retry then RuntimeError. SQL errors → status="error" with message. No silent swallowing of exceptions.
 
 - [x] **Documentation**
-  - Description: README covers setup (data, OpenRouter, Langfuse), benchmark usage. PLAN.md tracks all EPICs/stories. CHECKLIST.md (this file) documents decisions. SOLUTION_NOTES.md covers rationale and tradeoffs.
+  - Description: README covers setup (data, OpenRouter, Langfuse), benchmark usage. CHECKLIST.md (this file) documents decisions. SOLUTION_NOTES.md covers rationale, tradeoffs, and iteration history.
 
 ---
 
@@ -89,7 +89,7 @@ Incremental EPICs (1–11), each building on the last:
   - Description: Compact schema representation (`table(col1,col2,...)` instead of verbose text). Terse system prompts. Result truncation to 20 rows before answer generation. JSON-only output format eliminates verbose explanations.
 
 - [x] **Efficient LLM requests**
-  - Description: Bounded LRU response cache (128 entries, hash-keyed) eliminates duplicate LLM calls. Schema cached at init. Fetch limit aligned to 20 rows (matches answer generation usage — no wasted fetching). max_tokens=4096 accommodates reasoning models (model stops at EOS). Thread-safe stats with `threading.Lock`.
+  - Description: Bounded LRU response cache (128 entries, hash-keyed on messages + temperature + max_tokens) eliminates duplicate LLM calls. Schema cached at init. Fetch limit aligned to 20 rows (matches answer generation usage — no wasted fetching). max_tokens=4096 accommodates reasoning models (model stops at EOS). Thread-safe stats with `threading.Lock`.
 
 ---
 
@@ -181,11 +181,14 @@ Include your before/after benchmark results here.
 - p95 latency: `12183 ms`
 - Success rate: `0 %` (no schema context → invalid SQL)
 
-**Your solution:**
+**Your solution (cold-start, single run):**
 - Average latency: `7810 ms`
-- p50 latency: `351 ms` (cache hits on repeated runs)
-- p95 latency: `28147 ms` (cold LLM calls with reasoning model)
+- p95 latency: `28147 ms` (reasoning model variance)
 - Success rate: `83.33 %`
+
+> **Note:** Multi-run benchmarks reuse the same `AnalyticsPipeline` instance, so
+> run 2+ hit the in-memory LRU cache and show near-zero latency. The numbers above
+> reflect cold-start (first-run) performance. Cache-warmed p50 is ~351 ms.
 
 **LLM efficiency:**
 - Average tokens per request: `~300` (compressed prompts + caching)

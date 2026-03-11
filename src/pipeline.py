@@ -140,6 +140,12 @@ class ResultValidator:
         has_avg = "AVG(" in sql_upper
         has_sum = "SUM(" in sql_upper
 
+        agg_col_hints = re.findall(
+            r"(?:AVG|SUM|COUNT|MIN|MAX)\s*\([^)]*\)\s+(?:AS\s+)?\"?(\w+)\"?",
+            sql or "", re.IGNORECASE,
+        )
+        agg_col_names = {h.lower() for h in agg_col_hints}
+
         for row in rows:
             for col, val in row.items():
                 if val is None:
@@ -148,7 +154,7 @@ class ResultValidator:
                     if has_count and "count" in col.lower() and val < 0:
                         warnings.append(f"Negative COUNT value in column '{col}': {val}")
                 else:
-                    if has_avg or has_sum:
+                    if (has_avg or has_sum) and col.lower() in agg_col_names:
                         warnings.append(f"Non-numeric value in aggregation column '{col}': {val}")
 
         return warnings
